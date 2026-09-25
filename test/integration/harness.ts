@@ -9,6 +9,7 @@ const PATCH = join(ROOT, 'test/integration/fixtures/profile.patch.yml')
 
 export interface LlmCall {
   kind: 'judge' | 'main'
+  sessionId: string | null
   provider: string
   model: string
   reasoningEffort: string | null
@@ -19,6 +20,8 @@ export interface LlmCall {
 }
 
 export interface TurnResult {
+  /** The root session (subagent requests carry other session ids). */
+  sessionId: string | undefined
   exitCode: number | null
   final: string | undefined
   calls: LlmCall[]
@@ -67,10 +70,15 @@ export class HeadlessSession {
       : []
     const calls = all.slice(this.seen)
     this.seen = all.length
-    return { exitCode: run.status, final: lines.find(line => line.type === 'final')?.text, calls, stderr: run.stderr, stdout: run.stdout }
+    return { sessionId: this.sessionId, exitCode: run.status, final: lines.find(line => line.type === 'final')?.text, calls, stderr: run.stderr, stdout: run.stdout }
   }
 }
 
-export const mains = (turn: TurnResult) => turn.calls.filter(call => call.kind === 'main')
+/** Root-session model calls. */
+export const mains = (turn: TurnResult) => turn.calls.filter(call => call.kind === 'main' && call.sessionId === turn.sessionId)
+/** Subagent model calls. */
+export const children = (turn: TurnResult) => turn.calls.filter(call => call.kind === 'main' && call.sessionId !== turn.sessionId)
+const label = (call: LlmCall) => `${call.provider}/${call.model}@${call.reasoningEffort ?? ''}`
+export const childRoutes = (turn: TurnResult) => children(turn).map(label)
 export const judges = (turn: TurnResult) => turn.calls.filter(call => call.kind === 'judge')
-export const routes = (turn: TurnResult) => mains(turn).map(call => `${call.provider}/${call.model}@${call.reasoningEffort ?? ''}`)
+export const routes = (turn: TurnResult) => mains(turn).map(label)

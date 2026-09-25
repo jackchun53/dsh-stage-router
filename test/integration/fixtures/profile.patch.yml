@@ -27,6 +27,7 @@
           - id: test
             name: Test
             initialStage: code
+            subagents: { enabled: true, stage: inherit, classify: true }
             stages:
               - id: plan
                 name: Plan

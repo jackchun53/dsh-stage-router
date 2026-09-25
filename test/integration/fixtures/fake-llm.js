@@ -10,6 +10,9 @@
 //   EXITPLAN                      assistant calls exit_plan_mode
 //   TIERS1                        todo_write: "[T1][light] small fix" in progress, "big refactor" pending
 //   TIERS2                        todo_write: both of the above in progress
+//   SPAWN                         spawn a foreground subagent with the task "CHILD big job"
+//   FORK                          fork a subagent with the task "CHILD review it"
+// Subagent requests (task starts with CHILD) just answer with text.
 // Tier-judge requests (prompt lists "Tiers, lightest first") answer heavy for
 // tasks containing "big", light otherwise.
 import { appendFileSync } from 'node:fs'
@@ -56,6 +59,7 @@ class FakeAdapter extends LlmAdapter {
     const system = messages.filter(m => m.role === 'system').map(textOf).join('\n') + (options.system ?? '')
     const entry = {
       kind: judge ? 'judge' : 'main',
+      sessionId: options.sessionId ?? null,
       provider: options.provider,
       model: options.model,
       reasoningEffort: options.reasoningEffort ?? null,
@@ -87,6 +91,9 @@ class FakeAdapter extends LlmAdapter {
       if (prompt.includes('TODO')) return yield * toolCall('todo_write', { todos: [{ content: 'finish it', status: 'completed' }] })
       if (prompt.includes('TIERS1')) return yield * toolCall('todo_write', { todos: [{ content: '[T1][light] small fix', status: 'in_progress' }, { content: 'big refactor', status: 'pending' }] })
       if (prompt.includes('TIERS2')) return yield * toolCall('todo_write', { todos: [{ content: '[T1][light] small fix', status: 'in_progress' }, { content: 'big refactor', status: 'in_progress' }] })
+      if (prompt.startsWith('CHILD')) return yield * text(`child reply from ${options.provider}/${options.model}`)
+      if (prompt.includes('SPAWN')) return yield * toolCall('subagent', { description: 'helper', prompt: 'CHILD big job', run_in_background: false })
+      if (prompt.includes('FORK')) return yield * toolCall('subagent_fork', { description: 'second look', prompt: 'CHILD review it' })
       if (prompt.includes('EXITPLAN')) return yield * toolCall('exit_plan_mode', { plan: '# Plan\n\n1. do it' })
     }
     yield * text(`reply from ${options.provider}/${options.model}`)

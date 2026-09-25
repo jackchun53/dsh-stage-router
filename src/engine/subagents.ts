@@ -1,0 +1,85 @@
+import type { JudgeConfig, RouteConfig, SchemeConfig } from '../config/schema.js'
+import { hasTiers } from '../config/validate.js'
+import { TIER_WAIT_MS, plannerTag, taskTier, type TierClassifier, type TodoLike } from './tiers.js'
+
+/** What the plugin knows about a subagent at its first request. */
+export interface ChildView {
+  /** Forked from the parent's history (follows the parent's route). */
+  fork: boolean
+  /** The route the child would use unrouted: the parent's last logged route, or an explicit pick. */
+  config: RouteConfig
+  /** Task text: the first user message of the child. */
+  task: string
+  /** The delegation label (`description` of the subagent tool), when known. */
+  label?: string
+}
+
+/** The routed parent session at the moment its subagent starts. */
+export interface ParentView {
+  scheme: SchemeConfig
+  stage: string | null
+  route: RouteConfig | undefined
+  todos: readonly TodoLike[] | null | undefined
+}
+
+export interface ChildRoute {
+  route: RouteConfig
+  stage: string
+  tier?: string
+  reason: string
+}
+
+export interface ChildRouteDeps {
+  tiers: Pick<TierClassifier, 'classify' | 'lookup'>
+  judgeConfig: JudgeConfig
+  usable(route: RouteConfig): Promise<boolean>
+  waitMs?: number
+}
+
+const sameModel = (a: RouteConfig, b: RouteConfig) => a.provider === b.provider && a.model === b.model
+
+/**
+ * Decide a subagent's route (design §3 "子 agent"). `undefined` leaves the
+ * child's request untouched: routing is off for the scheme, the parent has no
+ * route yet, or the child's model was picked explicitly.
+ */
+export async function routeChild(child: ChildView, parent: ParentView, deps: ChildRouteDeps): Promise<ChildRoute | undefined> {
+  const settings = parent.scheme.subagents
+  if (!settings.enabled || parent.route === undefined) return undefined
+  // A child inherits the parent's last logged route; any other model was chosen on purpose.
+  if (!sameModel(child.config, parent.route)) return undefined
+  if (child.fork) {
+    return { route: parent.route, stage: parent.stage ?? parent.scheme.initialStage, reason: 'fork follows parent' }
+  }
+  const stageId = settings.stage === 'inherit' ? parent.stage ?? parent.scheme.initialStage : settings.stage
+  const stage = parent.scheme.stages.find(s => s.id === stageId)
+  if (stage === undefined) return undefined
+  if (!hasTiers(stage)) return { route: stage.route, stage: stage.id, reason: 'stage route' }
+
+  const tiers = stage.tiers!
+  const texts = [child.label, child.task].filter((text): text is string => text !== undefined && text.trim() !== '')
+  let tier: string | undefined
+  let reason = 'default tier'
+  for (const text of texts) {
+    tier = taskTier(stage, parent.todos, text)
+    if (tier !== undefined) {
+      reason = `planner task [T${plannerTag(text).task}]`
+      break
+    }
+  }
+  if (tier === undefined && settings.classify && tiers.source !== 'planner' && child.task.trim() !== '') {
+    deps.tiers.classify(stage, [child.task], deps.judgeConfig)
+    const pending = deps.tiers.lookup(stage, child.task)
+    let timer: NodeJS.Timeout | undefined
+    const expired = new Promise<undefined>(resolve => { timer = setTimeout(resolve, deps.waitMs ?? TIER_WAIT_MS, undefined) })
+    tier = pending === undefined ? undefined : await Promise.race([pending, expired])
+    clearTimeout(timer)
+    if (tier !== undefined) reason = 'judged task'
+  }
+  tier ??= tiers.default ?? tiers.levels[0]!.id
+  const level = tiers.levels.find(l => l.id === tier)
+  for (const route of [level?.route, stage.route]) {
+    if (route !== undefined && await deps.usable(route)) return { route, stage: stage.id, tier, reason }
+  }
+  return undefined
+}

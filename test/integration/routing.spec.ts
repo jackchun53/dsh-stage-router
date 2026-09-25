@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest'
-import { HeadlessSession, judges, mains, routes, type TurnResult } from './harness.js'
+import { HeadlessSession, childRoutes, children, judges, mains, routes, type TurnResult } from './harness.js'
 
 // One session, one scripted conversation; every turn reloads it from storage.
 // See fixtures/fake-llm.js for the JUDGE=/TODO/EXITPLAN keywords.
@@ -20,6 +20,8 @@ describe('stage routing in a headless session', () => {
       'JUDGE=broken use the broken one', // 6: stage model missing → initial stage model
       'JUDGE=code TIERS1 start',         // 7: tagged light todo in progress → light tier
       'JUDGE=code TIERS2 continue',      // 8: untagged "big" todo judged heavy → heavy wins
+      'JUDGE=code SPAWN delegate',       // 9: spawned child judged heavy → heavy tier model
+      'JUDGE=review FORK delegate',      // 10: forked child follows the parent route
     ]) {
       turns.push(session.send(prompt))
     }
@@ -95,5 +97,17 @@ describe('stage routing in a headless session', () => {
   it('judges untagged todos and lets the heaviest in-progress tier win', () => {
     expect(routes(turns[8]!)).toEqual(['fake/m-code@high', 'fake/m-heavy@max'])
     expect(judges(turns[8]!).length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('routes a spawned subagent by the judged tier of its task', () => {
+    expect(routes(turns[9]!)).toEqual(['fake/m-code@high', 'fake/m-code@high'])
+    expect(childRoutes(turns[9]!)).toEqual(['fake/m-heavy@max'])
+    expect(turns[9]!.final).toContain('reply from fake/m-code')
+  })
+
+  it('lets a forked subagent follow the parent route and keeps notices out of it', () => {
+    expect(routes(turns[10]!)).toEqual(['fake/m-review@high', 'fake/m-review@high'])
+    expect(childRoutes(turns[10]!)).toEqual(['fake/m-review@high'])
+    for (const call of children(turns[10]!)) expect(call.userSourceKinds).not.toContain('model-selection')
   })
 })

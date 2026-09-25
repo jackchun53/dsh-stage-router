@@ -12,6 +12,7 @@ import { ConfigSchema, effectiveJudge, type RouteConfig, type SchemeConfig, type
 import { checkRoutes, schemeRoutes, validateConfig } from './config/validate.js'
 import { JudgeCache, runJudge, summarizeRecent } from './engine/judge.js'
 import { SessionRouter, type StageEffect } from './engine/session-router.js'
+import { routeChild } from './engine/subagents.js'
 import { TierClassifier, type TodoLike } from './engine/tiers.js'
 import { INITIAL_STATE, PROJECTION_KEY, persistedScheme, stageProjection, type StageRouterState } from './engine/state.js'
 
@@ -203,8 +204,58 @@ export function apply(ctx: Context, config: Config): void {
 
   // `agent/inbox/claimed` is not awaited, so only remember the message here.
   ctx.on('agent/inbox/claimed', ({ agent, message }) => {
-    if (message.source.kind === 'user' && isRoot(agent)) claimed.set(agent, message)
+    if (message.source.kind !== 'user') return
+    if (isRoot(agent)) claimed.set(agent, message)
+    // A subagent's first user message is its task (first text block: the
+    // continuable driver appends its own guidance as a second block).
+    else if (!childTasks.has(agent)) {
+      const first = message.content.find(block => block.type === 'text')
+      childTasks.set(agent, first?.type === 'text' ? first.text : '')
+    }
   })
+
+  // ---- subagents (design §3; only when the scheme enables them) ----
+  const childTasks = new Map<Agent, string>()
+  /** Route decided at a child's first request; `null` = leave it alone. */
+  const childRoutes = new Map<Agent, RouteConfig | null>()
+  ctx.on('agent/disposed', ({ agent }) => {
+    childTasks.delete(agent)
+    childRoutes.delete(agent)
+  })
+
+  const decideChild = async (agent: Agent, call: LlmCallConfig): Promise<RouteConfig | undefined> => {
+    const header = agent.session.header
+    if (header.origin !== 'subagent' || header.parentSession === undefined) return undefined
+    const parentAgent = ctx.get('agents')?.get(header.parentSession)
+    const parentRouter = parentAgent === undefined ? undefined : active.get(parentAgent)
+    if (parentAgent === undefined || parentRouter === undefined) return undefined
+    const descriptor = agent.session.ownEvents().find(event => event.type === ('subagent/descriptor' as never))
+      ?.data as { provider?: string; label?: string } | undefined
+    const decided = await routeChild({
+      fork: header.isSeeded || descriptor?.provider === 'fork',
+      config: {
+        provider: call.provider,
+        model: call.model,
+        ...call.reasoningEffort === undefined ? {} : { reasoningEffort: String(call.reasoningEffort) },
+      },
+      task: childTasks.get(agent) ?? '',
+      ...descriptor?.label === undefined ? {} : { label: descriptor.label },
+    }, {
+      scheme: parentRouter.scheme,
+      stage: parentRouter.stage,
+      route: parentRouter.route,
+      todos: projection<TodoLike[] | null>(parentAgent.session, 'todos'),
+    }, {
+      tiers: tierClassifier,
+      judgeConfig: effectiveJudge(config.defaultJudge, parentRouter.scheme),
+      usable,
+    })
+    if (decided !== undefined) {
+      log('info', 'stage-router: subagent %s → %s/%s (stage %s%s, %s)', agent.session.id, decided.route.provider,
+        decided.route.model, decided.stage, decided.tier === undefined ? '' : ` · ${decided.tier}`, decided.reason)
+    }
+    return decided?.route
+  }
 
   ctx.on('agent/created', ({ agent }) => {
     if (!isRoot(agent)) return
@@ -291,8 +342,15 @@ export function apply(ctx: Context, config: Config): void {
     if (cached?.key === key) route = cached.route
     else {
       const router = active.get(agent)
+      let child = childRoutes.get(agent)
+      if (router === undefined && child === undefined && agent.session.header.origin === 'subagent') {
+        child = (await decideChild(agent, config)) ?? null
+        childRoutes.set(agent, child)
+      }
       if (router !== undefined) {
         route = router.route
+      } else if (child != null) {
+        route = child
       } else if (config.provider === PROVIDER) {
         // Not routed by a stage (subagent, unknown scheme): follow the parent's
         // current route, else the scheme's initial stage.
