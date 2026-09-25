@@ -159,3 +159,11 @@ describe('taskTier', () => {
     expect(taskTier(stage(), todos, 'no tag')).toBeUndefined()
   })
 })
+
+describe('pickTier overrides', () => {
+  it('lets a manual pin win over the planner tag', async () => {
+    const classifier = new TierClassifier(tierStream(() => 'light').stream, noop)
+    expect(await pickTier(stage(), [doing('[T1][light] tweak')], classifier, 20, { 1: 'heavy' })).toEqual({ tier: 'heavy', reason: 'manual' })
+    expect(await pickTier(stage(), [doing('[T1][light] tweak')], classifier, 20, { 1: 'mega' })).toEqual({ tier: 'light', reason: 'planner' })
+  })
+})

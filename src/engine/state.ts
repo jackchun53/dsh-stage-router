@@ -2,16 +2,13 @@ import { boundContextSummary, createUserMessage, type ContextFormed, type UserMe
 import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
 import { z } from 'zod'
 import type { RouteConfig } from '../config/schema.js'
+import {
+  PROJECTION_KEY, STAGE_COMMAND, TURN_HISTORY, modelLabel, parseStageCommand,
+  type JudgeRecord, type StageRef, type StageRouterState, type TurnRecord,
+} from '../shared/wire.js'
 
-/** Judge outcome recorded with a stage notice. */
-export interface JudgeRecord {
-  ok: boolean
-  stage?: string
-  confidence?: number
-  reason?: string
-  error?: string
-  elapsedMs: number
-}
+export { PROJECTION_KEY, STAGE_COMMAND, parseStageCommand } from '../shared/wire.js'
+export type { JudgeRecord, StageRef, StageRouterState, TurnRecord } from '../shared/wire.js'
 
 /**
  * Durable routing facts carried by the plugin's notice messages. dsh 0.1.7
@@ -22,6 +19,8 @@ export interface StageRouterMessageSource {
   readonly kind: 'stage-router'
   readonly scheme: string
   readonly stage: string
+  readonly stageName?: string
+  readonly stages?: readonly StageRef[]
   /** Tier inside the stage, when the stage has tiers and work is in progress. */
   readonly tier?: string
   readonly from: string | null
@@ -37,26 +36,6 @@ declare module '@deepseek-ai/dsh-llm' {
   }
 }
 
-/** Folded per-session routing state; also the client wire view. */
-export interface StageRouterState {
-  scheme: string | null
-  stage: string | null
-  tier: string | null
-  lock: string | null
-  route: RouteConfig | null
-  reason: string | null
-  judge: JudgeRecord | null
-  /**
-   * True after the user explicitly picked a non-stage-router model
-   * (`model/selection`); a later stage-router pick or notice clears it.
-   */
-  detached: boolean
-  /** A `/stage` command seen in `command/run`, applied when its `command/done` succeeds. */
-  pendingCommand: { id: string; args: string } | null
-  /** Number of stage-router notices folded so far. */
-  notices: number
-}
-
 declare module '@deepseek-ai/dsh-session-projection' {
   interface SessionProjectionStateMap {
     'stage-router': StageRouterState
@@ -66,10 +45,21 @@ declare module '@deepseek-ai/dsh-session-projection' {
   }
 }
 
-export const PROJECTION_KEY = 'stage-router'
-
 export const INITIAL_STATE: StageRouterState = {
-  scheme: null, stage: null, tier: null, lock: null, route: null, reason: null, judge: null, detached: false, pendingCommand: null, notices: 0,
+  scheme: null,
+  stage: null,
+  stageName: null,
+  stages: [],
+  tier: null,
+  lock: null,
+  route: null,
+  reason: null,
+  judge: null,
+  tierOverrides: {},
+  turns: [],
+  detached: false,
+  pendingCommand: null,
+  notices: 0,
 }
 
 const routeSchema = z.object({
@@ -90,11 +80,21 @@ const judgeSchema = z.object({
 export const stateSchema = z.object({
   scheme: z.string().nullable(),
   stage: z.string().nullable(),
+  stageName: z.string().nullable(),
+  stages: z.array(z.object({ id: z.string(), name: z.string() })),
   tier: z.string().nullable(),
   lock: z.string().nullable(),
   route: routeSchema.nullable(),
   reason: z.string().nullable(),
   judge: judgeSchema.nullable(),
+  tierOverrides: z.record(z.string(), z.string()),
+  turns: z.array(z.object({
+    turn: z.number(),
+    fromStage: z.string().nullable(),
+    fromModel: z.string().nullable(),
+    toStage: z.string().nullable(),
+    toModel: z.string().nullable(),
+  })),
   detached: z.boolean(),
   pendingCommand: z.object({ id: z.string(), args: z.string() }).nullable(),
   notices: z.number().int().nonnegative(),
@@ -110,25 +110,24 @@ export function noticeSource(event: { type: string; data?: unknown }): StageRout
 /** Virtual provider id (duplicated from adapter.ts to keep this module standalone). */
 const PROVIDER = 'stage-router'
 
-/** Name of the slash command that locks or unlocks the stage. */
-export const STAGE_COMMAND = 'stage'
-
-/**
- * What `/stage <args>` asks for: a lock on a stage id, `null` to unlock
- * (`auto`), or `undefined` for a read-only status query (empty / `status`).
- */
-export function parseStageArgs(args: string): string | null | undefined {
-  const arg = args.trim()
-  if (arg === '' || arg === 'status') return undefined
-  return arg === 'auto' ? null : arg
+/** Apply a successful `/stage` command to the durable state. */
+function applyCommand(state: StageRouterState, args: string): StageRouterState {
+  const command = parseStageCommand(args)
+  if (command.kind === 'lock') return { ...state, lock: command.stage }
+  if (command.kind !== 'tier') return state
+  const tierOverrides = { ...state.tierOverrides }
+  if (command.tier === null) delete tierOverrides[String(command.task)]
+  else tierOverrides[String(command.task)] = command.tier
+  return { ...state, tierOverrides }
 }
 
 /**
- * Pure fold over stage-router notices and explicit model picks
- * (`model/selection`, appended by the Web session controller).
+ * Pure fold over stage-router notices, `/stage` command lifecycle events,
+ * turn starts and explicit model picks (`model/selection`, appended by the
+ * Web session controller).
  */
 export function foldStageState(state: StageRouterState, event: { type: string; data?: unknown }): StageRouterState {
-  // `/stage` locks are durable through dsh's own command lifecycle events.
+  // `/stage` changes are durable through dsh's own command lifecycle events.
   if (event.type === 'command/run') {
     const run = event.data as { commandId?: unknown; name?: unknown; args?: unknown } | undefined
     if (run?.name !== STAGE_COMMAND || typeof run.commandId !== 'string') return state
@@ -138,8 +137,15 @@ export function foldStageState(state: StageRouterState, event: { type: string; d
     const done = event.data as { commandId?: unknown; kind?: unknown } | undefined
     const pending = state.pendingCommand
     if (pending === null || done?.commandId !== pending.id) return state
-    const lock = done.kind === 'success' ? parseStageArgs(pending.args) : undefined
-    return lock === undefined ? { ...state, pendingCommand: null } : { ...state, lock, pendingCommand: null }
+    const cleared = { ...state, pendingCommand: null }
+    return done.kind === 'success' ? applyCommand(cleared, pending.args) : cleared
+  }
+  if (event.type === 'turn/start') {
+    const turn = (event.data as { turn?: unknown } | undefined)?.turn
+    if (typeof turn !== 'number') return state
+    const model = modelLabel(state.route)
+    const record: TurnRecord = { turn, fromStage: state.stage, fromModel: model, toStage: state.stage, toModel: model }
+    return { ...state, turns: [...state.turns, record].slice(-TURN_HISTORY) }
   }
   if (event.type === 'model/selection') {
     const picked = event.data as { provider?: unknown; model?: unknown } | undefined
@@ -150,16 +156,23 @@ export function foldStageState(state: StageRouterState, event: { type: string; d
   }
   const source = noticeSource(event)
   if (source === undefined) return state
+  const last = state.turns.at(-1)
+  const turns = last === undefined
+    ? state.turns
+    : [...state.turns.slice(0, -1), { ...last, toStage: source.stage, toModel: modelLabel(source.route) }]
   return {
+    ...state,
     scheme: source.scheme,
     stage: source.stage,
+    stageName: source.stageName ?? source.stage,
+    stages: source.stages === undefined ? state.stages : [...source.stages],
     tier: source.tier ?? null,
     lock: source.lock,
     route: source.route,
     reason: source.reason,
     judge: source.judge ?? null,
+    turns,
     detached: false,
-    pendingCommand: state.pendingCommand,
     notices: state.notices + 1,
   }
 }
@@ -178,7 +191,7 @@ export const stageProjection: WiredProjection = {
   init: () => INITIAL_STATE,
   apply: (state, event) => foldStageState(state, event),
   wire: { viewSchema: stateSchema, view: state => state },
-  stateVersion: 1,
+  stateVersion: 2,
 }
 
 function routeLabel(route: RouteConfig): string {
@@ -186,17 +199,17 @@ function routeLabel(route: RouteConfig): string {
 }
 
 /**
- * The notice appended when the stage, lock or model changes. The text tells
- * the model what happened (dsh's own model-change notice is filtered out).
+ * The notice appended when the stage, tier, lock or model changes. The text
+ * tells the model what happened (dsh's own model-change notice is filtered out).
  */
-export function stageNotice(input: Omit<StageRouterMessageSource, 'kind'> & { stageName: string }): UserMessage {
-  const { stageName, ...facts } = input
-  const where = facts.tier === undefined ? stageName : `${stageName} · ${facts.tier}`
+export function stageNotice(input: Omit<StageRouterMessageSource, 'kind' | 'stageName'> & { stageName: string }): UserMessage {
+  const facts = input
+  const where = facts.tier === undefined ? facts.stageName : `${facts.stageName} · ${facts.tier}`
   const summary = facts.from === facts.stage
     ? `${where} · ${routeLabel(facts.route)}`
     : `${facts.from ?? '—'} → ${where} · ${routeLabel(facts.route)}`
   const tierText = facts.tier === undefined ? '' : `, tier ${facts.tier}`
-  const text = `[stage-router: stage "${facts.stage}" (${stageName})${tierText}, model ${routeLabel(facts.route)}${facts.lock === null ? '' : ', locked'}. `
+  const text = `[stage-router: stage "${facts.stage}" (${facts.stageName})${tierText}, model ${routeLabel(facts.route)}${facts.lock === null ? '' : ', locked'}. `
     + 'Assistant turns above may come from other models.]'
   return createUserMessage({
     content: [{ type: 'text', text }],

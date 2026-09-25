@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import { INITIAL_STATE, foldStageState, parseStageArgs, persistedScheme, stageNotice, stageProjection, stateSchema, type StageRouterState } from '../src/engine/state.js'
+import { INITIAL_STATE, foldStageState, parseStageCommand, persistedScheme, stageNotice, stageProjection, stateSchema, type StageRouterState } from '../src/engine/state.js'
 
 const route = { provider: 'fake', model: 'real-code' }
 
@@ -33,7 +33,7 @@ describe('foldStageState', () => {
       asEvent(notice('plan', { from: 'review', lock: 'plan', reason: 'locked' })),
     ])
     expect(state).toEqual({
-      scheme: 'dev', stage: 'plan', tier: null, lock: 'plan', route, reason: 'locked', judge: null, detached: false, pendingCommand: null, notices: 3,
+      ...INITIAL_STATE, scheme: 'dev', stage: 'plan', stageName: 'plan', lock: 'plan', route, reason: 'locked', notices: 3,
     })
   })
 
@@ -98,10 +98,21 @@ describe('/stage command lifecycle', () => {
   const done = (commandId: string, kind = 'success') => ({ type: 'command/done', data: { commandId, kind } })
 
   it('parses /stage arguments', () => {
-    expect(parseStageArgs('')).toBeUndefined()
-    expect(parseStageArgs(' status ')).toBeUndefined()
-    expect(parseStageArgs(' auto')).toBeNull()
-    expect(parseStageArgs(' review ')).toBe('review')
+    expect(parseStageCommand('')).toEqual({ kind: 'status' })
+    expect(parseStageCommand(' status ')).toEqual({ kind: 'status' })
+    expect(parseStageCommand('log')).toEqual({ kind: 'log' })
+    expect(parseStageCommand(' auto')).toEqual({ kind: 'lock', stage: null })
+    expect(parseStageCommand(' review ')).toEqual({ kind: 'lock', stage: 'review' })
+    expect(parseStageCommand('tier T2 light')).toEqual({ kind: 'tier', task: 2, tier: 'light' })
+    expect(parseStageCommand('tier 3 auto')).toEqual({ kind: 'tier', task: 3, tier: null })
+    expect(parseStageCommand('tier T2')).toMatchObject({ kind: 'invalid' })
+    expect(parseStageCommand('review now')).toMatchObject({ kind: 'invalid' })
+  })
+
+  it('pins and releases task tiers', () => {
+    const pinned = [run('c1', 'tier T2 light'), done('c1'), run('c2', 'tier T3 heavy'), done('c2')].reduce(foldStageState, INITIAL_STATE)
+    expect(pinned.tierOverrides).toEqual({ 2: 'light', 3: 'heavy' })
+    expect([run('c3', 'tier T2 auto'), done('c3')].reduce(foldStageState, pinned).tierOverrides).toEqual({ 3: 'heavy' })
   })
 
   it('locks only when the command succeeds', () => {
@@ -115,5 +126,36 @@ describe('/stage command lifecycle', () => {
     const locked = [run('c1', 'review'), done('c1')].reduce(foldStageState, INITIAL_STATE)
     expect([run('c2', ''), done('c2')].reduce(foldStageState, locked).lock).toBe('review')
     expect([run('c3', 'auto'), done('c3')].reduce(foldStageState, locked).lock).toBeNull()
+  })
+})
+
+describe('turn records and stage names', () => {
+  const turnStart = (turn: number) => ({ type: 'turn/start', data: { turn } })
+
+  it('records where each turn started and ended', () => {
+    const review = { provider: 'fake', model: 'm-review', reasoningEffort: 'high' }
+    const state = fold([
+      turnStart(1), asEvent(notice('code', { stageName: 'Code' })),
+      turnStart(2),
+      turnStart(3), asEvent(notice('review', { from: 'code', route: review, stageName: 'Review' })),
+    ])
+    expect(state.turns).toEqual([
+      { turn: 1, fromStage: null, fromModel: null, toStage: 'code', toModel: 'real-code' },
+      { turn: 2, fromStage: 'code', fromModel: 'real-code', toStage: 'code', toModel: 'real-code' },
+      { turn: 3, fromStage: 'code', fromModel: 'real-code', toStage: 'review', toModel: 'm-review@high' },
+    ])
+    expect(state.stageName).toBe('Review')
+  })
+
+  it('keeps only the latest turns', () => {
+    const state = fold(Array.from({ length: 30 }, (_, i) => turnStart(i + 1)))
+    expect(state.turns).toHaveLength(20)
+    expect(state.turns[0]!.turn).toBe(11)
+  })
+
+  it('keeps the stage list from the latest notice that carries one', () => {
+    const stages = [{ id: 'code', name: 'Code' }, { id: 'review', name: 'Review' }]
+    const state = fold([asEvent(notice('code', { stages })), asEvent(notice('review'))])
+    expect(state.stages).toEqual(stages)
   })
 })

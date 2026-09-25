@@ -151,7 +151,7 @@ export class TierClassifier {
 export interface TierPick {
   tier: string
   /** Where the winning tier came from. */
-  reason: 'planner' | 'judge' | 'default'
+  reason: 'manual' | 'planner' | 'judge' | 'default'
 }
 
 /** How one todo's tier is sourced, per `tiers.source`. */
@@ -172,6 +172,8 @@ export async function pickTier(
   todos: readonly TodoLike[] | null | undefined,
   classifier: Pick<TierClassifier, 'lookup'>,
   waitMs = TIER_WAIT_MS,
+  /** Manual tier per planner task number (`/stage tier T2 light`). */
+  overrides: Readonly<Record<string, string>> = {},
 ): Promise<TierPick | undefined> {
   if (!hasTiers(stage)) return undefined
   const tiers = stage.tiers!
@@ -182,6 +184,9 @@ export async function pickTier(
   const expired = new Promise<undefined>(resolve => { deadline = setTimeout(resolve, waitMs, undefined) })
   try {
     const picks = await Promise.all(active.map(async (todo): Promise<TierPick> => {
+      const task = plannerTag(todo.content).task
+      const manual = task === undefined ? undefined : overrides[String(task)]
+      if (tierRank(tiers, manual) >= 0) return { tier: manual!, reason: 'manual' }
       const tagged = tagTier(tiers.source, tiers, todo.content)
       if (tagged !== undefined) return { tier: tagged, reason: 'planner' }
       const pending = tiers.source === 'planner' ? undefined : classifier.lookup(stage, todo.content)

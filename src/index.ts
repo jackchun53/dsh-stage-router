@@ -16,7 +16,7 @@ import { SessionRouter, type StageEffect } from './engine/session-router.js'
 import { routeChild } from './engine/subagents.js'
 import { TierClassifier, type TodoLike } from './engine/tiers.js'
 import { DecisionLog } from './engine/decisions.js'
-import { INITIAL_STATE, PROJECTION_KEY, STAGE_COMMAND, parseStageArgs, persistedScheme, stageProjection, type StageRouterState } from './engine/state.js'
+import { INITIAL_STATE, PROJECTION_KEY, STAGE_COMMAND, parseStageCommand, persistedScheme, stageProjection, type StageRouterState } from './engine/state.js'
 
 export { PROVIDER } from './adapter.js'
 export type { StageRouterMessageSource, StageRouterState } from './engine/state.js'
@@ -181,24 +181,49 @@ export function apply(ctx: Context, config: Config): void {
     planMode.set(agent, effect.planMode)
   }
 
-  // ---- /stage command: lock, unlock, status ----
+  // ---- /stage command: status, log, lock, unlock, per-task tier ----
   ctx.inject(['commands'], commandCtx => {
     commandCtx.commands.register({
       name: STAGE_COMMAND,
-      description: 'Show the stage-router stage, lock it (/stage <stage id>) or return to automatic routing (/stage auto)',
-      input: { hint: '<stage id> | auto' },
+      description: 'stage-router: show the stage (/stage), recent decisions (/stage log), lock a stage (/stage <id>), '
+        + 'route automatically (/stage auto), or pin a task tier (/stage tier T<n> <tier|auto>)',
+      input: { hint: '[<stage id> | auto | log | tier T<n> <tier>]' },
       handler: ({ agent, rawInput }) => {
         const scheme = schemeFor(agent)
         if (scheme === undefined) return { kind: 'error', text: 'This session is not routed by a stage-router scheme.' }
         const router = routerFor(agent, scheme)
-        const target = parseStageArgs(rawInput)
-        if (target === undefined) return { kind: 'success', text: router.describe() }
-        if (target !== null && !scheme.stages.some(stage => stage.id === target)) {
-          return { kind: 'error', text: `Unknown stage "${target}". Stages: ${scheme.stages.map(stage => stage.id).join(', ')}.` }
+        const command = parseStageCommand(rawInput)
+        switch (command.kind) {
+          case 'invalid':
+            return { kind: 'error', text: command.message }
+          case 'status':
+            return { kind: 'success', text: router.describe() }
+          case 'log': {
+            const recent = decisions.recent(agent.session.id, 10)
+            if (recent.length === 0) return { kind: 'success', text: 'No routing decisions in this host process yet.' }
+            return {
+              kind: 'success',
+              text: recent.map(d => `turn ${d.turn}.${d.step}: ${d.stage}${d.tier === null ? '' : ` · ${d.tier}`} → `
+                + `${d.route.provider}/${d.route.model} (${d.reason})`).join('\n'),
+            }
+          }
+          case 'lock': {
+            if (command.stage !== null && !scheme.stages.some(stage => stage.id === command.stage)) {
+              return { kind: 'error', text: `Unknown stage "${command.stage}". Stages: ${scheme.stages.map(stage => stage.id).join(', ')}.` }
+            }
+            applyEffect(agent, router.setLock(command.stage))
+            log('info', 'stage-router: %s %s', agent.session.id, command.stage === null ? 'unlocked' : `locked to ${command.stage}`)
+            return { kind: 'success', text: command.stage === null ? 'Stage routing is automatic again.' : `Stage locked to ${command.stage}.` }
+          }
+          case 'tier': {
+            const known = new Set(scheme.stages.flatMap(stage => stage.tiers?.levels.map(level => level.id) ?? []))
+            if (command.tier !== null && !known.has(command.tier)) {
+              return { kind: 'error', text: `Unknown tier "${command.tier}". Tiers: ${[...known].join(', ') || '(none configured)'}.` }
+            }
+            router.setTierOverride(command.task, command.tier)
+            return { kind: 'success', text: command.tier === null ? `Task T${command.task} tier is automatic again.` : `Task T${command.task} pinned to ${command.tier}.` }
+          }
         }
-        applyEffect(agent, router.setLock(target))
-        log('info', 'stage-router: %s %s', agent.session.id, target === null ? 'unlocked' : `locked to ${target}`)
-        return { kind: 'success', text: target === null ? 'Stage routing is automatic again.' : `Stage locked to ${target}.` }
       },
     })
   })

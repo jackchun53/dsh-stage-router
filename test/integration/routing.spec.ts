@@ -27,6 +27,8 @@ describe('stage routing in a headless session', () => {
       'CMD=nope JUDGE=review bad lock',  // 13: unknown stage → command error, lock unchanged
       'CMD=auto JUDGE=review unlock',    // 14: /stage auto
       'JUDGE=review free again',         // 15: judge routes again
+      'CMD=tier_T1_heavy JUDGE=code pin',// 16: /stage tier T1 heavy
+      'JUDGE=code TIERS1 pinned',        // 17: [T1][light] in progress, but pinned heavy
     ]) {
       turns.push(session.send(prompt))
     }
@@ -127,5 +129,11 @@ describe('stage routing in a headless session', () => {
     expect(commands(turns[14]!)[0]!.result).toMatchObject({ kind: 'success' })
     expect(routes(turns[15]!)).toEqual(['fake/m-review@high'])
     expect(judges(turns[15]!)).toHaveLength(1)
+  })
+
+  it('pins a planner task to a tier with /stage tier', () => {
+    const command = turns[16]!.calls.find(call => call.kind === 'command')
+    expect(command?.result).toMatchObject({ kind: 'success', text: 'Task T1 pinned to heavy.' })
+    expect(routes(turns[17]!)).toEqual(['fake/m-code@high', 'fake/m-heavy@max'])
   })
 })

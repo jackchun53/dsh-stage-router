@@ -22,7 +22,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
-    "test": "vitest run",
+    "test": "tsc -p tsconfig.json && vitest run",
     "test:unit": "vitest run --project unit",
     "test:integration": "npm run build && vitest run --project integration"
   },

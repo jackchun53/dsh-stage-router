@@ -14,6 +14,7 @@
 //   FORK                          fork a subagent with the task "CHILD review it"
 // Subagent requests (task starts with CHILD) just answer with text.
 //   CMD=<args>                    the fixture runs `/stage <args>` when the message is claimed
+//                                 (underscores become spaces: CMD=tier_T1_heavy)
 //                                 (headless never parses slash commands itself)
 // Tier-judge requests (prompt lists "Tiers, lightest first") answer heavy for
 // tasks containing "big", light otherwise.
@@ -112,7 +113,7 @@ export function apply(ctx) {
     const commands = ctx.get('commands')
     if (arg === undefined || commands === undefined || agent.session.header.parentSession !== undefined) return
     void Promise.resolve()
-      .then(() => commands.execute(agent, `/stage ${arg}`, [], new AbortController().signal))
+      .then(() => commands.execute(agent, `/stage ${arg.replaceAll('_', ' ')}`, [], new AbortController().signal))
       .then(result => LOG && appendFileSync(LOG, JSON.stringify({ kind: 'command', args: arg, result: result?.result ?? null }) + '\n'))
   })
   // Headless has no human to answer exit_plan_mode's review: approve it.

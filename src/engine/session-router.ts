@@ -58,6 +58,8 @@ export class SessionRouter {
   /** A `plan-review` question was answered since plan mode was last seen on. */
   private reviewed = false
   private todosFired: string | undefined
+  /** Manual tier per planner task number, seeded from the log. */
+  private tierOverrides: Record<string, string>
 
   constructor(
     readonly scheme: SchemeConfig,
@@ -70,6 +72,7 @@ export class SessionRouter {
     this.lock = sameScheme && known(persisted.lock) ? persisted.lock : null
     this.route = sameScheme && persisted.route !== null ? persisted.route : undefined
     this.tier = sameScheme && persisted.tier !== null ? persisted.tier : undefined
+    this.tierOverrides = { ...persisted.tierOverrides }
     this.announced = { stage: this.stage, tier: this.tier, lock: this.lock, route: routeKey(this.route) }
   }
 
@@ -137,6 +140,16 @@ export class SessionRouter {
     this.lock = stage
     this.reason = stage === null ? 'unlocked' : 'locked'
     return stage === null || stage === this.stage ? undefined : this.enter(stage)
+  }
+
+  /** Pin (or with `null`, release) the tier of planner task `T<task>`. */
+  setTierOverride(task: number, tier: string | null): void {
+    if (tier === null) delete this.tierOverrides[String(task)]
+    else this.tierOverrides[String(task)] = tier
+  }
+
+  get overrides(): Readonly<Record<string, string>> {
+    return this.tierOverrides
   }
 
   /** Record that a plan-review question was answered (the approval path of `exit_plan_mode`). */
@@ -217,7 +230,7 @@ export class SessionRouter {
   async resolveRoute(todos?: readonly TodoLike[] | null): Promise<RouteConfig | undefined> {
     if (this.stage === null) this.stage = this.scheme.initialStage
     const stage = this.stageConfig
-    const pick = stage === undefined ? undefined : await pickTier(stage, todos, this.deps.tiers, this.deps.tierWaitMs)
+    const pick = stage === undefined ? undefined : await pickTier(stage, todos, this.deps.tiers, this.deps.tierWaitMs, this.tierOverrides)
     this.tier = pick?.tier
     const tierRoute = pick === undefined ? undefined : stage?.tiers?.levels.find(level => level.id === pick.tier)?.route
     if (pick !== undefined) this.deps.log('debug', 'stage-router: stage %s tier %s (%s)', this.stage, pick.tier, pick.reason)
@@ -246,6 +259,7 @@ export class SessionRouter {
     this.announced = current
     return stageNotice({
       stageName: this.stageConfig?.name || this.stage,
+      stages: this.scheme.stages.map(stage => ({ id: stage.id, name: stage.name || stage.id })),
       scheme: this.scheme.id,
       stage: this.stage,
       ...this.tier === undefined ? {} : { tier: this.tier },
