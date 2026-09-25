@@ -171,11 +171,11 @@ stage-router:
 - **注意**：dsh 的待办列表在每轮开始时会被清空（`tool-todo/src/index.ts:134`）。
 
 **子 agent**（`subagents.enabled=true` 时才处理）
-- **识别**：子 agent 的会话头里有 `parentSession`，且父会话选用了本插件的方案。
-- **尊重显式指定**：子 agent 请求的模型和父会话最近一次请求用的模型不同，说明是显式指定的 → 不改写。
-- **fork 出来的子 agent**：跟随父会话的当前阶段和档位。
+- **识别**：子 agent 的会话头里有 `origin: 'subagent'` 和 `parentSession`，且父会话正在按本插件的方案路由（父 agent 用 `ctx.agents.get(parentSession)` 找回）。0.1.7 里子 agent 继承的是父会话请求头里的**真实模型**，不会经过虚拟模型。
+- **尊重显式指定**：子 agent 第一次请求时的模型和父会话当前路由的 provider/model 不同，说明是显式指定的 → 不改写。这个决定在第一次请求时做一次，按 agent 缓存。
+- **fork 出来的子 agent**：跟随父会话的当前阶段和档位。识别依据是会话头 `isSeeded`，或子会话里 `subagent/descriptor` 事件的 `provider === 'fork'`。
 - **新建的子 agent**：
-  - 任务描述以 `[Tn]` 开头 → 用第 n 号任务的档位。
+  - 任务描述以 `[Tn]` 开头 → 用第 n 号任务的档位。先看工具的 `description`（descriptor 的 `label`），再看任务文本，也就是子 agent 第一条用户消息的第一个文字块。
   - 否则当 `classify=true` 时，对任务描述调用判断器定档。
   - `stage` 可以写 `inherit`（跟随父会话），也可以写死某个阶段 ID。
 
@@ -298,3 +298,7 @@ test/
 - **决策时机**：第 0 期的"附"项之所以通过，是因为验证插件在 `agent/inbox/claimed` 里就同步定了阶段。实际要调用判断器，必须等待，所以决策放在 `system-prompt/assemble`，并在需要时重新组装。
 - **默认模型会话的路由漂移**：Web 端没有明确选过模型时，session-controller 会把请求头里的模型当作当前选择（`api/session-controller/src/agent.ts:294-310`）。本插件改写后请求头是真实模型，第二次请求起就会脱离路由。修正：投影 `stage-router` 同时折叠 `model/selection` 事件；只要本插件写过提示、且之后用户没有明确换成别的模型，就继续按原方案路由。
 - **计划批准信号**：`user-questions/request` 监听要用 `prepend` 注册，否则宿主的应答者不调用 `next()` 时会被跳过。判断计划模式时用"待定值优先"（`pending ?? active`），这样批准在下一步组装时就能识别出来。
+
+第 2 期实现中的发现（详见 `docs/superpowers/plans/2026-09-25-phase2-tiers-subagents.md`）：
+- 子 agent 继承父会话**最近一次记录的请求头**（`subagent/subagent/src/child-agent.ts:69-86`），而本插件改写后那里是真实模型，所以子 agent 必须按会话头识别，不能靠虚拟 provider。
+- 分档判断在每次组装系统提示词时启动（有缓存，不重复判断），定档在同一次组装里完成，最多等 1.5 秒。

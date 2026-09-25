@@ -44,6 +44,14 @@ export const EXAMPLE_SCHEME: SchemeConfig = {
       description: '编写、修改、调试代码',
       route: { provider: 'deepseek-official', model: 'deepseek-flash' },
       planMode: 'exit',
+      tiers: {
+        source: 'planner-then-judge',
+        default: 'heavy',
+        levels: [
+          { id: 'light', description: '局部改动、步骤明确', route: { provider: 'deepseek-official', model: 'deepseek-flash' } },
+          { id: 'heavy', description: '跨模块、需要设计取舍', route: { provider: 'deepseek-official', model: 'deepseek-v4-pro', reasoningEffort: 'high' } },
+        ],
+      },
     },
     {
       id: 'review',
