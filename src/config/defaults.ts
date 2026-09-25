@@ -1,0 +1,63 @@
+import type { SchemeConfig } from './schema.js'
+
+/**
+ * Built-in judge prompt. Variables: `{{current}}` (current stage id or `none`),
+ * `{{candidates}}` (one `- id: description` line per candidate stage),
+ * `{{recent}}` (recent conversation excerpt) and `{{message}}` (the new user message).
+ */
+export const DEFAULT_JUDGE_TEMPLATE = `You classify which stage a coding conversation is in, so the right model handles the next reply.
+
+Current stage: {{current}}
+
+Candidate stages:
+{{candidates}}
+
+Recent conversation:
+{{recent}}
+
+New user message:
+{{message}}
+
+Pick exactly one candidate stage id for handling the new user message.
+Reply with JSON only, no prose:
+{"stage": "<candidate id>", "confidence": <number between 0 and 1>, "reason": "<one short sentence>"}`
+
+/** Example scheme shipped in the bundle layer (`cordis.patch.yml`). */
+export const EXAMPLE_SCHEME: SchemeConfig = {
+  id: 'dev-default',
+  name: '研发默认',
+  initialStage: 'code',
+  judge: null,
+  subagents: { enabled: false, stage: 'inherit', classify: true },
+  stages: [
+    {
+      id: 'plan',
+      name: '规划',
+      description: '讨论方案、做设计或规划实现步骤，尚未要求动手写代码',
+      route: { provider: 'deepseek-official', model: 'deepseek-v4-pro', reasoningEffort: 'max' },
+      prompt: '当前处于规划阶段：先澄清需求，再把实现拆成编号任务，形如 [T1][light] …，不要直接改代码。',
+      planMode: 'enter',
+    },
+    {
+      id: 'code',
+      name: '编码',
+      description: '编写、修改、调试代码',
+      route: { provider: 'deepseek-official', model: 'deepseek-flash' },
+      planMode: 'exit',
+    },
+    {
+      id: 'review',
+      name: '审查',
+      description: '审查已完成的改动，找出缺陷和遗漏',
+      route: { provider: 'deepseek-official', model: 'deepseek-v4-pro', reasoningEffort: 'high' },
+      prompt: '当前处于审查阶段：逐项核对刚完成的改动，指出缺陷、遗漏的测试和风险，不要扩大改动范围。',
+      planMode: 'keep',
+    },
+  ],
+  transitions: [
+    { from: '*', to: 'plan', on: 'plan_mode_on' },
+    { from: 'plan', to: 'code', on: 'plan_approved' },
+    { from: 'code', to: 'review', on: 'todos_done' },
+    { from: '*', to: '*', on: 'user_message' },
+  ],
+}

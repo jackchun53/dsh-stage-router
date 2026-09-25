@@ -9,6 +9,6 @@ describe('plugin module', () => {
   })
 
   it('parses an empty config', () => {
-    expect(() => plugin.Config({})).not.toThrow()
+    expect(plugin.Config({} as never).schemes).toEqual([])
   })
 })
