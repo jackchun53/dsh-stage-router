@@ -1,10 +1,10 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, PreStepDecision } from '@deepseek-ai/dsh-agent'
-import type { LlmCallConfig, Message, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import type { LlmCallConfig, Message, ReasoningEffortId, UserMessage } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-plan-mode'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-projection'
-import type {} from '@deepseek-ai/dsh-system-prompt'
+import type { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-user-questions'
 import type z from '@deepseek-ai/schemastery'
 import { PROVIDER, StageRouterAdapter, initialRoute } from './adapter.js'
@@ -108,8 +108,10 @@ export function apply(ctx: Context, config: Config): void {
   }, 'stage-router: startup model check')
 
   const routers = new Map<Session, SessionRouter>()
-  /** Agents whose current step was routed by the pre-step hook, keyed to that step. */
-  const routedStep = new Map<Agent, { turn: number; step: number }>()
+  /** Root agents routed in their current step (set at prompt assembly). */
+  const active = new Map<Agent, SessionRouter>()
+  /** The latest user message claimed per agent, judged at the next assembly. */
+  const claimed = new Map<Agent, UserMessage>()
   /** Route used per (agent, turn, step), so a retried request keeps its model. */
   const stepRoutes = new Map<Agent, { key: string; route: RouteConfig }>()
 
@@ -156,6 +158,12 @@ export function apply(ctx: Context, config: Config): void {
     return router
   }
 
+  /** Plan mode as the next request will see it: a pending selection wins over the logged state. */
+  const effectivePlanMode = (agent: Agent): boolean | undefined => {
+    const state = ctx.get('planMode')?.get(agent)
+    return state === undefined ? undefined : state.pending ?? state.active
+  }
+
   const applyEffect = (agent: Agent, effect: StageEffect | undefined) => {
     if (effect?.planMode === undefined) return
     const planMode = ctx.get('planMode')
@@ -167,74 +175,103 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   // ---- stage prompt ----
+  let systemPrompt: SystemPrompt | undefined
+  const STAGE_SECTION = 'stage-router:stage'
+  const stagePrompt = (agent: Agent) => active.get(agent)?.stageConfig?.prompt ?? ''
   ctx.inject(['systemPrompt'], promptCtx => {
+    systemPrompt = promptCtx.systemPrompt
+    promptCtx.effect(() => () => { systemPrompt = undefined }, 'stage-router: forget system prompt service')
     promptCtx.systemPrompt.section({
-      name: 'stage-router:stage',
+      name: STAGE_SECTION,
       order: promptCtx.systemPrompt.getSectionOrder('PLAN_POLICY') + 1,
-      text: context => {
-        const agent = context.agent
-        if (agent === undefined || !routedStep.has(agent)) return ''
-        const prompt = routers.get(agent.session)?.stageConfig?.prompt
-        return prompt === undefined || prompt === '' ? '' : prompt
-      },
+      text: context => context.agent === undefined ? '' : stagePrompt(context.agent),
     })
   })
 
-  // ---- plan approval signal ----
+  // ---- plan approval signal (prepended so a host answerer cannot hide it) ----
   ctx.on('user-questions/request', async (request, next) => {
     const answer = await next()
     const agent = (request as { agent?: Agent }).agent
-    const reviewed = request.questions.some(question => question.id === 'plan-review')
-    if (agent !== undefined && reviewed) routers.get(agent.session)?.markPlanReview()
+    if (agent !== undefined && request.questions.some(question => question.id === 'plan-review')) {
+      routers.get(agent.session)?.markPlanReview()
+    }
     return answer
+  }, { prepend: true })
+
+  // `agent/inbox/claimed` is not awaited, so only remember the message here.
+  ctx.on('agent/inbox/claimed', ({ agent, message }) => {
+    if (message.source.kind === 'user' && isRoot(agent)) claimed.set(agent, message)
   })
 
-  // ---- per-agent pre-step: decide stage, filter dsh's model notice, announce ----
   ctx.on('agent/created', ({ agent }) => {
     if (!isRoot(agent)) return
-    const dispose = ctx.on('agent/pre-step', async ({ agent: current, messages, step, turn }, next): Promise<PreStepDecision> => {
-      if (current !== agent) return next()
+
+    // Decide the stage in the first awaited hook of a step. dsh resolves
+    // section texts before this waterfall runs, so when the decision changes
+    // what the prompt should say (stage prompt, plan mode) the listener
+    // assembles once more, with itself stepping aside.
+    let reassembling = false
+    const disposeAssemble = ctx.on('system-prompt/assemble', async (assembly, context, next) => {
+      if (context.agent !== agent || reassembling) return next()
       const scheme = schemeFor(agent)
       if (scheme === undefined) {
-        routedStep.delete(agent)
+        active.delete(agent)
+        claimed.delete(agent)
         return next()
       }
       const router = routerFor(agent, scheme)
-      const planMode = ctx.get('planMode')
+      active.set(agent, router)
+      const planBefore = effectivePlanMode(agent)
       const observePlan = () => {
-        if (planMode === undefined) return
-        const trigger = router.observePlanMode(planMode.get(agent).active)
+        const planActive = effectivePlanMode(agent)
+        if (planActive === undefined) return
+        const trigger = router.observePlanMode(planActive)
         if (trigger !== undefined) applyEffect(agent, router.onTrigger(trigger))
       }
       observePlan()
-      const userMessage = messages.find(message => message.source.kind === 'user')
-      if (userMessage !== undefined) {
+      if (router.observeTodos(projection(agent.session, 'todos'))) applyEffect(agent, router.onTrigger('todos_done'))
+      const message = claimed.get(agent)
+      if (message !== undefined) {
+        claimed.delete(agent)
         const judgeConfig = effectiveJudge(config.defaultJudge, scheme)
         applyEffect(agent, await router.onUserMessage({
-          messageId: userMessage.id,
-          text: textOf(userMessage),
+          messageId: message.id,
+          text: textOf(message),
           recent: summarizeRecent(agent.session.deriveMessages(), judgeConfig.contextTurns),
         }))
       }
-
-      const decision = await next()
-      if (decision.kind === 'reject') return decision
-
+      // Swallow the plan-mode switch this router just asked for.
       observePlan()
-      if (router.observeTodos(projection(agent.session, 'todos'))) applyEffect(agent, router.onTrigger('todos_done'))
       await router.resolveRoute()
-      routedStep.set(agent, { turn, step })
+      const resolvedPrompt = assembly.sections.find(section => section.name === STAGE_SECTION)?.text ?? ''
+      const stale = resolvedPrompt !== stagePrompt(agent) || effectivePlanMode(agent) !== planBefore
+      if (!stale || systemPrompt === undefined) return next()
+      reassembling = true
+      try {
+        return await systemPrompt.assemble(context)
+      } finally {
+        reassembling = false
+      }
+    }, { prepend: true })
 
+    // Filter dsh's model-change notice and announce stage changes.
+    const disposePreStep = ctx.on('agent/pre-step', async ({ agent: current, messages, step }, next): Promise<PreStepDecision> => {
+      const decision = await next()
+      const router = current === agent ? active.get(agent) : undefined
+      if (router === undefined || decision.kind === 'reject') return decision
       const kept = decision.messages.filter(message => message.source.kind !== 'model-selection')
       // Mirror model-selection: never turn an empty first step (or an emptied continuation) into a request.
       if (kept.length === 0 && (step === 1 || messages.length > 0)) return { ...decision, messages: kept }
       const notice = router.takeNotice()
       return { ...decision, messages: notice === undefined ? kept : [...kept, notice] }
     }, { prepend: true })
+
     ctx.on('agent/disposed', ({ agent: gone }) => {
       if (gone !== agent) return
-      dispose()
-      routedStep.delete(agent)
+      disposeAssemble()
+      disposePreStep()
+      active.delete(agent)
+      claimed.delete(agent)
       stepRoutes.delete(agent)
       routers.delete(agent.session)
     })
@@ -248,9 +285,9 @@ export function apply(ctx: Context, config: Config): void {
     let route: RouteConfig | undefined
     if (cached?.key === key) route = cached.route
     else {
-      const marked = routedStep.get(agent)
-      if (marked !== undefined && marked.turn === turn && marked.step === step) {
-        route = routers.get(agent.session)?.route
+      const router = active.get(agent)
+      if (router !== undefined) {
+        route = router.route
       } else if (config.provider === PROVIDER) {
         // Not routed by a stage (subagent, unknown scheme): follow the parent's
         // current route, else the scheme's initial stage.

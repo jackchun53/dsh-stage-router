@@ -72,7 +72,10 @@ class FakeAdapter extends LlmAdapter {
       return yield * text(JSON.stringify({ stage: marker[1], confidence: Number(marker[2] ?? 0.9), reason: 'scripted' }))
     }
     const prompt = textOf(lastUser)
-    if (messages.at(-1)?.role !== 'tool') {
+    // A stage notice may follow a tool result, so "continuation" means any
+    // tool message after the last real user message.
+    const continuation = messages.slice(messages.lastIndexOf(lastUser) + 1).some(m => m.role === 'tool')
+    if (!continuation) {
       if (prompt.includes('TODO')) return yield * toolCall('todo_write', { todos: [{ content: 'finish it', status: 'completed' }] })
       if (prompt.includes('EXITPLAN')) return yield * toolCall('exit_plan_mode', { plan: '# Plan\n\n1. do it' })
     }

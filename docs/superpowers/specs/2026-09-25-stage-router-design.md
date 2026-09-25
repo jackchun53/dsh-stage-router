@@ -45,9 +45,10 @@ skill-vault 客户端的「预设模型」（`skill-vault/packages/dsh-plugin`�
 
 | 钩子 | 在哪里注册 | 作用 |
 |---|---|---|
-| `agent/inbox/claimed` | 插件的根作用域 | 用户新消息被取出时执行状态机，决定本轮阶段，并联动计划模式 |
+| `agent/inbox/claimed` | 插件的根作用域 | 只记下被取出的用户消息。这个事件是同步的，不会等待，所以不能在这里调用判断器 |
+| `system-prompt/assemble`（`prepend`） | 在 `agent/created` 里按 agent 注册 | **每一步里第一个会被等待的钩子**，顺序是：取出消息 → 求值各段落 → 本钩子 → pre-step → request。在这里执行状态机和判断器、联动计划模式、解析路由。dsh 在进入这个钩子**之前**就已经求值了各段落，所以当决策改变了阶段提示词或计划模式时，本钩子会带防重入保护地调用 `systemPrompt.assemble(context)` 重新组装一次，这样这一步的系统提示词就是完整的 |
 | `ctx.systemPrompt.section({name:'stage-router:stage', order, text:c=>…})` | 插件的根作用域 | 按 agent 注入当前阶段的提示词。`order` 必填，取 `ctx.systemPrompt.getSectionOrder('PLAN_POLICY') + 1`，紧跟计划模式的段落。做法与 `plan/plan-mode/src/index.ts:217` 相同 |
-| `agent/pre-step`（`prepend`） | **在 `agent/created` 事件里，为每个 agent 单独注册**，在 `agent/disposed` 时注销 | dsh 自带的模型切换提示钩子也是按 agent、以 `prepend` 注册的（`core/agent/src/model-selection.ts:113-126`）。本插件的钩子注册得更晚、同样 `prepend`，就排在它外层，`await next()` 之后能看到它追加的提示。作用：过滤掉 `source.kind==='model-selection'` 的提示（仅当当前选择的是本插件的虚拟模型时）；处理 `todos_done` 和计划批准的转换；阶段或模型真的变化时，追加一条本插件的提示 |
+| `agent/pre-step`（`prepend`） | **在 `agent/created` 事件里，为每个 agent 单独注册**，在 `agent/disposed` 时注销 | dsh 自带的模型切换提示钩子也是按 agent、以 `prepend` 注册的（`core/agent/src/model-selection.ts:113-126`）。本插件的钩子注册得更晚、同样 `prepend`，就排在它外层，`await next()` 之后能看到它追加的提示。作用：过滤掉 `source.kind==='model-selection'` 的提示（仅当当前选择的是本插件的虚拟模型时）；阶段或模型真的变化时，追加一条本插件的提示（转换已在 assemble 钩子里处理） |
 | `agent/request`（`prepend`） | 插件的根作用域（第 0 期已验证能胜过 model-selection） | 先 `await next()` 拿到原配置。dsh 的 model-selection 在它自己的 `agent/request` 钩子里、`next()` 之后把 provider/model 覆盖成所选模型（`model-selection.ts:96-112`），所以本插件的钩子必须在它外层。如果 provider 是 `stage-router`（或属于要路由的子 agent），就改写成当前阶段和档位对应的真实 `{provider, model, reasoningEffort}`。同一次请求失败重试时，沿用第一次的结果 |
 
 **这样做带来的好处**
@@ -292,3 +293,8 @@ test/
 - 0.1.7 的系统提示词在 `messages` 里以 `role:'system'` 出现，`GenerateOptions.system` 为空。
 - 请求头是真实模型，model-selection 从第 2 轮起**每一步**都会生成模型切换提示，所以 pre-step 过滤是必需的。
 - `/stage` 命令的 `rawInput` 带前导空格，要 `trim()`。
+
+第 1 期实现中的发现与修正：
+- **决策时机**：第 0 期的"附"项之所以通过，是因为验证插件在 `agent/inbox/claimed` 里就同步定了阶段。实际要调用判断器，必须等待，所以决策放在 `system-prompt/assemble`，并在需要时重新组装。
+- **默认模型会话的路由漂移**：Web 端没有明确选过模型时，session-controller 会把请求头里的模型当作当前选择（`api/session-controller/src/agent.ts:294-310`）。本插件改写后请求头是真实模型，第二次请求起就会脱离路由。修正：投影 `stage-router` 同时折叠 `model/selection` 事件；只要本插件写过提示、且之后用户没有明确换成别的模型，就继续按原方案路由。
+- **计划批准信号**：`user-questions/request` 监听要用 `prepend` 注册，否则宿主的应答者不调用 `next()` 时会被跳过。判断计划模式时用"待定值优先"（`pending ?? active`），这样批准在下一步组装时就能识别出来。

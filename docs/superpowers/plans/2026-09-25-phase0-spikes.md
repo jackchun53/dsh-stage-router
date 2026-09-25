@@ -40,7 +40,7 @@ SPIKE_FILTER=0 node run.mjs short                    # 对照：不过滤模型�
 | 4 | 在 `agent/inbox/claimed` 里调用 `planMode.set`，当步生效；能识别计划批准 | **通过** | `set` 返回 `'queued'`，但第 1 步的 pre-step 里 `planMode.active` 已经是 `true`，消息里也出现了 `plan-mode` 的说明消息。`exit_plan_mode` 被批准后，第 2 步的 pre-step 里 `planMode.active` 变回 `false` |
 | 5 | 插件能注册 `/stage` 命令 | **通过（需本地复核界面）** | `ctx.commands.register` 成功；`ctx.commands.execute(agent,'/stage code',…)` 调到了处理函数，返回 `{kind:'success'}`。注意 `rawInput` 是 `" code"`，**带前导空格**，要 `trim()`。无界面模式不解析斜杠命令，命令面板里能不能看到要在 Web 端确认 |
 | 6 | 虚拟模型声明支持图片后，带图片的消息能通过检查 | **通过（需本地复核界面）** | `ctx.llm.resolveModelInfo('stage-router','spike')` 返回 `inputModalities:['text','image']`，按 `api/session-controller/src/commands.ts:336-345` 的判断逻辑能通过。实际上传图片要在 Web 端确认 |
-| 附 | 阶段提示词段落 `systemPrompt.section({name, order, text})` | **通过** | 假服务商收到的系统消息里有 `STAGE_PROMPT(code)` / `STAGE_PROMPT(review)`，当步生效 |
+| 附 | 阶段提示词段落 `systemPrompt.section({name, order, text})` | **通过，但有前提** | 假服务商收到的系统消息里有 `STAGE_PROMPT(code)` / `STAGE_PROMPT(review)`，当步生效。**更正（第 1 期）**：能当步生效，是因为验证插件在 `agent/inbox/claimed` 里就同步定了阶段；dsh 在 `system-prompt/assemble` 钩子之前就求值了各段落。需要等待判断器时，做法见设计 §9 |
 
 ## 顺带发现的情况，影响后续设计
 
