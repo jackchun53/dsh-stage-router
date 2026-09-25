@@ -17,6 +17,7 @@ import { SessionRouter, type StageEffect } from './engine/session-router.js'
 import { routeChild } from './engine/subagents.js'
 import { TierClassifier, type TodoLike } from './engine/tiers.js'
 import { DecisionLog } from './engine/decisions.js'
+import { StageRouterEditorRemote, createEditorHandlers } from './editor-remote.js'
 import { INITIAL_STATE, PROJECTION_KEY, STAGE_COMMAND, parseStageCommand, persistedScheme, stageProjection, type StageRouterState } from './engine/state.js'
 
 export { PROVIDER } from './adapter.js'
@@ -235,6 +236,17 @@ export function apply(ctx: Context, live: Config): void {
     }
     planMode.set(agent, effect.planMode)
   }
+
+  // ---- settings editor remote (stageRouter/*) ----
+  ctx.plugin(StageRouterEditorRemote, createEditorHandlers({
+    current: () => config,
+    settings: () => ctx.get('settings'),
+    stream: options => ctx.llm.stream(options),
+    usable,
+    providers: () => ctx.llm.listProviders(),
+    listModels: provider => ctx.llm.listModels(provider),
+    resolveModelInfo: (provider, model) => ctx.llm.resolveModelInfo(provider, model),
+  }))
 
   // ---- /stage command: status, log, lock, unlock, per-task tier ----
   ctx.inject(['commands'], commandCtx => {
