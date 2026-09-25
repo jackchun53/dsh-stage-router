@@ -43,6 +43,11 @@ export interface StageRouterState {
   route: RouteConfig | null
   reason: string | null
   judge: JudgeRecord | null
+  /**
+   * True after the user explicitly picked a non-stage-router model
+   * (`model/selection`); a later stage-router pick or notice clears it.
+   */
+  detached: boolean
   /** Number of stage-router notices folded so far. */
   notices: number
 }
@@ -59,7 +64,7 @@ declare module '@deepseek-ai/dsh-session-projection' {
 export const PROJECTION_KEY = 'stage-router'
 
 export const INITIAL_STATE: StageRouterState = {
-  scheme: null, stage: null, lock: null, route: null, reason: null, judge: null, notices: 0,
+  scheme: null, stage: null, lock: null, route: null, reason: null, judge: null, detached: false, notices: 0,
 }
 
 const routeSchema = z.object({
@@ -84,6 +89,7 @@ export const stateSchema = z.object({
   route: routeSchema.nullable(),
   reason: z.string().nullable(),
   judge: judgeSchema.nullable(),
+  detached: z.boolean(),
   notices: z.number().int().nonnegative(),
 }) as unknown as z.ZodType<StageRouterState>
 
@@ -94,8 +100,21 @@ export function noticeSource(event: { type: string; data?: unknown }): StageRout
   return source?.kind === 'stage-router' ? source as StageRouterMessageSource : undefined
 }
 
-/** Pure fold: only stage-router notices change the state. */
+/** Virtual provider id (duplicated from adapter.ts to keep this module standalone). */
+const PROVIDER = 'stage-router'
+
+/**
+ * Pure fold over stage-router notices and explicit model picks
+ * (`model/selection`, appended by the Web session controller).
+ */
 export function foldStageState(state: StageRouterState, event: { type: string; data?: unknown }): StageRouterState {
+  if (event.type === 'model/selection') {
+    const picked = event.data as { provider?: unknown; model?: unknown } | undefined
+    if (picked?.provider === PROVIDER && typeof picked.model === 'string') {
+      return state.detached || state.scheme !== picked.model ? { ...state, scheme: picked.model, detached: false } : state
+    }
+    return state.detached ? state : { ...state, detached: true }
+  }
   const source = noticeSource(event)
   if (source === undefined) return state
   return {
@@ -105,11 +124,20 @@ export function foldStageState(state: StageRouterState, event: { type: string; d
     route: source.route,
     reason: source.reason,
     judge: source.judge ?? null,
+    detached: false,
     notices: state.notices + 1,
   }
 }
 
-export const stageProjection: ProjectionDefinition<'stage-router', StageRouterState> = {
+/** The scheme a session is routed by according to its log, or `null`. */
+export function persistedScheme(state: StageRouterState): string | null {
+  return state.detached ? null : state.scheme
+}
+
+type WiredProjection = Omit<ProjectionDefinition<'stage-router', StageRouterState>, 'wire'>
+  & { wire: NonNullable<ProjectionDefinition<'stage-router', StageRouterState>['wire']> }
+
+export const stageProjection: WiredProjection = {
   key: PROJECTION_KEY,
   stateSchema,
   init: () => INITIAL_STATE,

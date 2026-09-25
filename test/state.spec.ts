@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import { INITIAL_STATE, foldStageState, stageNotice, stageProjection, stateSchema, type StageRouterState } from '../src/engine/state.js'
+import { INITIAL_STATE, foldStageState, persistedScheme, stageNotice, stageProjection, stateSchema, type StageRouterState } from '../src/engine/state.js'
 
 const route = { provider: 'fake', model: 'real-code' }
 
@@ -33,7 +33,7 @@ describe('foldStageState', () => {
       asEvent(notice('plan', { from: 'review', lock: 'plan', reason: 'locked' })),
     ])
     expect(state).toEqual({
-      scheme: 'dev', stage: 'plan', lock: 'plan', route, reason: 'locked', judge: null, notices: 3,
+      scheme: 'dev', stage: 'plan', lock: 'plan', route, reason: 'locked', judge: null, detached: false, notices: 3,
     })
   })
 
@@ -56,12 +56,30 @@ describe('stageProjection', () => {
     const state = fold([asEvent(notice('code', { judge: { ok: true, stage: 'code', confidence: 1, elapsedMs: 3 } }))])
     expect(stageProjection.init(undefined as never, 0 as never)).toEqual(INITIAL_STATE)
     expect(stateSchema.parse(INITIAL_STATE)).toEqual(INITIAL_STATE)
-    const view = stageProjection.wire!.view(state)
-    expect(stageProjection.wire!.viewSchema.parse(view)).toEqual(view)
+    const view = stageProjection.wire.view(state)
+    expect(stageProjection.wire.viewSchema.parse(view)).toEqual(view)
   })
 
   it('survives a JSON round trip, as the projection cache stores it', () => {
     const state = fold([asEvent(notice('code'))])
     expect(stateSchema.parse(JSON.parse(JSON.stringify(state)))).toEqual(state)
+  })
+})
+
+describe('explicit model picks', () => {
+  const pick = (provider: string, model: string) => ({ type: 'model/selection', data: { provider, model } })
+
+  it('detaches on a real-model pick and re-attaches on a scheme pick or notice', () => {
+    const routed = fold([asEvent(notice('code'))])
+    expect(persistedScheme(routed)).toBe('dev')
+    const detached = foldStageState(routed, pick('deepseek-official', 'deepseek-flash'))
+    expect(persistedScheme(detached)).toBeNull()
+    expect(detached.stage).toBe('code')
+    expect(persistedScheme(foldStageState(detached, pick('stage-router', 'other')))).toBe('other')
+    expect(persistedScheme(foldStageState(detached, asEvent(notice('review'))))).toBe('dev')
+  })
+
+  it('records a scheme pick before any notice', () => {
+    expect(persistedScheme(foldStageState(INITIAL_STATE, pick('stage-router', 'dev')))).toBe('dev')
   })
 })

@@ -1,0 +1,55 @@
+# Integration overlay: keyless run on the fake provider, stage-router scheme selected by default.
+- id: agent-default-model
+  config:
+    provider: stage-router
+    model: test
+
+- id: llm-deepseek
+  disabled: true
+- id: llm-deepseek-account
+  disabled: true
+- id: session-title-llm
+  disabled: true
+
+- insert:
+    - id: fake-llm
+      name: ./fake-llm.js
+    - id: stage-router
+      name: ../../../lib/index.js
+      config:
+        defaultJudge:
+          route: { provider: fake, model: m-judge, reasoningEffort: 'off' }
+          timeoutMs: 1500
+          minConfidence: 0.6
+          contextTurns: 2
+          promptTemplate: null
+        schemes:
+          - id: test
+            name: Test
+            initialStage: code
+            stages:
+              - id: plan
+                name: Plan
+                description: design and planning
+                route: { provider: fake, model: m-plan, reasoningEffort: max }
+                prompt: STAGE_PROMPT_PLAN
+                planMode: enter
+              - id: code
+                name: Code
+                description: write code
+                route: { provider: fake, model: m-code }
+                planMode: exit
+              - id: review
+                name: Review
+                description: review changes
+                route: { provider: fake, model: m-review, reasoningEffort: high }
+                prompt: STAGE_PROMPT_REVIEW
+              - id: broken
+                name: Broken
+                description: stage whose model is missing
+                route: { provider: fake, model: m-missing }
+            transitions:
+              - { from: '*', to: plan, on: plan_mode_on }
+              - { from: plan, to: code, on: plan_approved }
+              - { from: code, to: review, on: todos_done }
+              - { from: '*', to: '*', on: user_message }
