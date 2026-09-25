@@ -51,12 +51,12 @@ export function apply(ctx: ClientContext): void {
     locale: NS,
     inject: (sessionId: SessionId): StageChipInjected => ({
       runStage: async args => {
-        if (commands === undefined) return 'commands are unavailable'
+        if (commands === undefined) return '命令服务不可用'
         const result = await commands.execute(sessionId, `/stage ${args}`, [])
         if (!result.ok) return `${result.error.message} (${result.error.code})`
-        if (result.value === undefined) return 'unknown command: /stage'
+        if (result.value === undefined) return '找不到 /stage 命令'
         const done = result.value.result as { kind?: string; text?: string } | undefined
-        return done?.kind === 'error' ? done.text ?? 'failed' : null
+        return done?.kind === 'error' ? done.text ?? '执行失败' : null
       },
     }),
   }, StageChip))

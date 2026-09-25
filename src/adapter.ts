@@ -32,12 +32,12 @@ export class StageRouterAdapter extends LlmAdapter {
   }
 
   override providerInfo(provider: string) {
-    return { id: provider, name: 'Stage Router' }
+    return { id: provider, name: '阶段路由' }
   }
 
   private scheme(model: string): SchemeConfig {
     const scheme = this.host.schemes().find(s => s.id === model)
-    if (scheme === undefined) throw new LlmError(`stage-router: no scheme "${model}"`, 'INVALID_REQUEST')
+    if (scheme === undefined) throw new LlmError(`stage-router：没有方案「${model}」`, 'INVALID_REQUEST')
     return scheme
   }
 
@@ -45,7 +45,7 @@ export class StageRouterAdapter extends LlmAdapter {
     return this.host.schemes().map(scheme => ({
       provider,
       id: scheme.id,
-      name: scheme.name === '' ? `${PROVIDER}/${scheme.id}` : `${scheme.name} (${PROVIDER})`,
+      name: scheme.name === '' ? `阶段路由/${scheme.id}` : `${scheme.name}（阶段路由）`,
       description: scheme.stages.map(stage => stage.name || stage.id).join(' → '),
     }))
   }
@@ -75,7 +75,7 @@ export class StageRouterAdapter extends LlmAdapter {
   override async * stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
     const scheme = this.scheme(options.model)
     const route = initialRoute(scheme)
-    if (route === undefined) throw new LlmError(`stage-router: scheme "${scheme.id}" has no stages`, 'INVALID_REQUEST')
+    if (route === undefined) throw new LlmError(`stage-router：方案「${scheme.id}」没有阶段`, 'INVALID_REQUEST')
     this.host.warn('stage-router: virtual model %s streamed directly; forwarding to %s/%s', options.model, route.provider, route.model)
     const { reasoningEffort: _ignored, ...rest } = options
     yield * this.host.llm.stream({

@@ -89,11 +89,11 @@ export function parseStageCommand(args: string): StageCommand {
     const task = /^T?(\d+)$/i.exec(rest[0] ?? '')
     const tier = rest[1]
     if (task === null || tier === undefined || rest.length > 2) {
-      return { kind: 'invalid', message: 'Usage: /stage tier T<n> <tier id | auto>' }
+      return { kind: 'invalid', message: '用法：/stage tier T<n> <档位 ID | auto>' }
     }
     return { kind: 'tier', task: Number(task[1]), tier: tier === 'auto' ? null : tier }
   }
-  if (rest.length > 0) return { kind: 'invalid', message: 'Usage: /stage [status | log | auto | <stage id> | tier T<n> <tier>]' }
+  if (rest.length > 0) return { kind: 'invalid', message: '用法：/stage [status | log | auto | <阶段 ID> | tier T<n> <档位>]' }
   return { kind: 'lock', stage: first }
 }
 

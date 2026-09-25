@@ -1,3 +1,4 @@
+import { EVENT_LABELS } from '../config/constants.js'
 import { ANY_STAGE, type SchemeConfig, type TransitionEvent } from '../config/schema.js'
 
 /** The part of a session's routing state the state machine reads. */
@@ -49,19 +50,19 @@ export function candidatesFor(state: MachineState, event: TransitionEvent, schem
  */
 export function decide(state: MachineState, event: TransitionEvent, scheme: SchemeConfig): Decision {
   if (state.lock !== null && scheme.stages.some(stage => stage.id === state.lock)) {
-    return move(state, state.lock, 'locked')
+    return move(state, state.lock, '已锁定')
   }
   const candidates = candidatesFor(state, event, scheme)
   if (event !== 'user_message') {
     const first = candidates[0]
-    return first === undefined ? { kind: 'stay', reason: `no rule for ${event}` } : move(state, first, event)
+    return first === undefined ? { kind: 'stay', reason: `没有匹配「${EVENT_LABELS[event]}」的规则` } : move(state, first, EVENT_LABELS[event])
   }
   if (candidates.length === 0) {
     return state.stage === null
-      ? { kind: 'goto', stage: scheme.initialStage, reason: 'initial' }
-      : { kind: 'stay', reason: 'no rule for user_message' }
+      ? { kind: 'goto', stage: scheme.initialStage, reason: '会话第一条消息，进入初始阶段' }
+      : { kind: 'stay', reason: '没有匹配「用户消息」的规则' }
   }
-  if (candidates.length === 1) return move(state, candidates[0]!, 'single candidate')
+  if (candidates.length === 1) return move(state, candidates[0]!, '规则只剩一个候选阶段')
   return { kind: 'judge', candidates }
 }
 
@@ -78,12 +79,12 @@ export function applyJudgement(
   initialStage: string,
 ): Decision {
   const fallback = (reason: string): Decision => state.stage === null
-    ? { kind: 'goto', stage: initialStage, reason: `initial (${reason})` }
+    ? { kind: 'goto', stage: initialStage, reason: `会话第一条消息，进入初始阶段（${reason}）` }
     : { kind: 'stay', reason }
-  if (!judgement.ok) return fallback(`judge failed: ${judgement.error}`)
-  if (!candidates.includes(judgement.stage)) return fallback(`judge chose non-candidate "${judgement.stage}"`)
+  if (!judgement.ok) return fallback(`判断失败：${judgement.error}`)
+  if (!candidates.includes(judgement.stage)) return fallback(`判断器选了候选之外的阶段「${judgement.stage}」`)
   if (judgement.confidence < minConfidence) {
-    return fallback(`low confidence ${judgement.confidence} < ${minConfidence}`)
+    return fallback(`置信度 ${judgement.confidence} 低于 ${minConfidence}`)
   }
-  return move(state, judgement.stage, `judge: ${judgement.reason}`)
+  return move(state, judgement.stage, `判断器：${judgement.reason || '（未给出原因）'}`)
 }

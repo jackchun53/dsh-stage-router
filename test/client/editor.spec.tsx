@@ -66,7 +66,7 @@ describe('StageRouterEditor', () => {
   })
 
   it('treats unavailable models as warnings that do not block saving', async () => {
-    const api = fakeApi({ validate: vi.fn(async () => [{ path: 'schemes[0].stages[0].route', message: 'model deepseek-official/deepseek-v4-pro is unavailable' }]) })
+    const api = fakeApi({ validate: vi.fn(async () => [{ path: 'schemes[0].stages[0].route', message: '模型 deepseek-official/deepseek-v4-pro 当前不可用' }]) })
     renderEditor(api)
     fireEvent.change(await screen.findByLabelText('名称'), { target: { value: 'X' } })
     await screen.findByText('1 个提醒')

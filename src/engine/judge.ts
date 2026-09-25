@@ -88,18 +88,18 @@ export function firstObject(text: string): string | undefined {
 /** Tolerant parse of the judge's reply: code fences, surrounding prose, string numbers. */
 export function parseJudgement(text: string): Judgement {
   const raw = firstObject(text)
-  if (raw === undefined) return { ok: false, error: 'no JSON object in reply' }
+  if (raw === undefined) return { ok: false, error: '回复里没有 JSON 对象' }
   let value: unknown
   try {
     value = JSON.parse(raw)
   } catch {
-    return { ok: false, error: 'malformed JSON' }
+    return { ok: false, error: 'JSON 格式有误' }
   }
-  if (typeof value !== 'object' || value === null) return { ok: false, error: 'reply is not an object' }
+  if (typeof value !== 'object' || value === null) return { ok: false, error: '回复不是 JSON 对象' }
   const { stage, confidence, reason } = value as Record<string, unknown>
-  if (typeof stage !== 'string' || stage.trim() === '') return { ok: false, error: 'missing "stage"' }
+  if (typeof stage !== 'string' || stage.trim() === '') return { ok: false, error: '缺少 "stage" 字段' }
   const score = typeof confidence === 'string' ? Number(confidence) : confidence
-  if (typeof score !== 'number' || Number.isNaN(score)) return { ok: false, error: 'missing "confidence"' }
+  if (typeof score !== 'number' || Number.isNaN(score)) return { ok: false, error: '缺少 "confidence" 字段' }
   return {
     ok: true,
     stage: stage.trim(),
@@ -142,14 +142,14 @@ export async function runJudge(
       if (combined.aborted) break
       assembler.push(chunk)
     }
-    if (timeout.aborted) return done({ ok: false, error: `timeout after ${config.timeoutMs}ms` })
-    if (combined.aborted) return done({ ok: false, error: 'aborted' })
+    if (timeout.aborted) return done({ ok: false, error: `超时（${config.timeoutMs} 毫秒）` })
+    if (combined.aborted) return done({ ok: false, error: '已取消' })
     const finish = assembler.finish
-    if (finish.kind === 'error') return done({ ok: false, error: `provider error: ${finish.failure.message}` })
+    if (finish.kind === 'error') return done({ ok: false, error: `模型服务出错：${finish.failure.message}` })
     const text = assembler.blocks().flatMap(block => block.type === 'text' ? [block.text] : []).join('')
     return done(parseJudgement(text))
   } catch (error) {
-    if (timeout.aborted) return done({ ok: false, error: `timeout after ${config.timeoutMs}ms` })
+    if (timeout.aborted) return done({ ok: false, error: `超时（${config.timeoutMs} 毫秒）` })
     return done({ ok: false, error: error instanceof Error ? error.message : String(error) })
   }
 }

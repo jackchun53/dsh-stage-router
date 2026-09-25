@@ -113,7 +113,7 @@ describe('SessionRouter', () => {
     expect(router.stage).toBe('review')
     expect(judged).toEqual([])
     await router.resolveRoute()
-    expect(router.takeNotice()!.source).toMatchObject({ lock: 'review', reason: 'locked' })
+    expect(router.takeNotice()!.source).toMatchObject({ lock: 'review', reason: '已锁定' })
     router.setLock(null)
     await router.onUserMessage(turn('m2'))
     expect(router.stage).toBe('plan')
@@ -183,8 +183,8 @@ describe('SessionRouter tiers', () => {
 describe('SessionRouter.describe', () => {
   it('summarises stage, model and lock for /stage', async () => {
     const router = new SessionRouter(scheme, { ...INITIAL_STATE, scheme: scheme.id, stage: 'code', route: flash, notices: 1 }, deps().d)
-    expect(router.describe()).toBe('stage code (编码) · model deepseek-official/deepseek-flash · automatic. Stages: plan, code, review.')
+    expect(router.describe()).toBe('阶段 编码（code） · 模型 deepseek-official/deepseek-flash · 自动。可用阶段：plan、code、review。')
     router.setLock('review')
-    expect(router.describe()).toContain('locked to review')
+    expect(router.describe()).toContain('已锁定到 review')
   })
 })

@@ -95,14 +95,14 @@ describe('runJudge', () => {
       yield* reply('{}')
     })()
     const result = await runJudge(stream, { ...config, timeoutMs: 30 }, input)
-    expect(result).toMatchObject({ ok: false, error: 'timeout after 30ms' })
+    expect(result).toMatchObject({ ok: false, error: '超时（30 毫秒）' })
   })
 
   it('fails on a provider error finish', async () => {
     const stream: StreamFn = async function* () {
       yield { type: 'finish', reason: { kind: 'error', failure: { code: 'SERVER', message: 'boom' } } } as StreamChunk
     }
-    expect(await runJudge(stream, config, input)).toMatchObject({ ok: false, error: 'provider error: boom' })
+    expect(await runJudge(stream, config, input)).toMatchObject({ ok: false, error: '模型服务出错：boom' })
   })
 
   it('fails when the stream throws', async () => {

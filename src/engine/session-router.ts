@@ -48,7 +48,7 @@ export class SessionRouter {
   tier: string | undefined
   lock: string | null
   route: RouteConfig | undefined
-  private reason = 'resume'
+  private reason = '恢复会话'
   private judgement: JudgeRecord | undefined
   private announced: { stage: string | null; tier: string | undefined; lock: string | null; route: string }
   /** Plan-mode state seen at the end of the last pre-step; `undefined` until observed. */
@@ -90,12 +90,12 @@ export class SessionRouter {
   describe(): string {
     const stage = this.stageConfig
     const parts = [
-      `stage ${this.stage ?? '(none yet)'}${stage?.name ? ` (${stage.name})` : ''}`,
-      ...this.tier === undefined ? [] : [`tier ${this.tier}`],
-      ...this.route === undefined ? [] : [`model ${this.route.provider}/${this.route.model}`],
-      this.lock === null ? 'automatic' : `locked to ${this.lock}`,
+      `阶段 ${this.stage === null ? '（尚未开始）' : stage?.name ? `${stage.name}（${this.stage}）` : this.stage}`,
+      ...this.tier === undefined ? [] : [`档位 ${this.tier}`],
+      ...this.route === undefined ? [] : [`模型 ${this.route.provider}/${this.route.model}`],
+      this.lock === null ? '自动' : `已锁定到 ${this.lock}`,
     ]
-    return `${parts.join(' · ')}. Stages: ${this.scheme.stages.map(s => s.id).join(', ')}.`
+    return `${parts.join(' · ')}。可用阶段：${this.scheme.stages.map(s => s.id).join('、')}。`
   }
 
   get stageConfig(): StageConfig | undefined {
@@ -138,7 +138,7 @@ export class SessionRouter {
   setLock(stage: string | null): StageEffect | undefined {
     if (stage !== null && !this.scheme.stages.some(s => s.id === stage)) throw new Error(`unknown stage "${stage}"`)
     this.lock = stage
-    this.reason = stage === null ? 'unlocked' : 'locked'
+    this.reason = stage === null ? '已恢复自动' : '已锁定'
     return stage === null || stage === this.stage ? undefined : this.enter(stage)
   }
 

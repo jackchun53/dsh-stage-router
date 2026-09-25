@@ -11,12 +11,13 @@ try {
   await page.goto(run.url)
   await onboard(page)
   await send(page, 'JUDGE=review hello')
-  const chip = page.getByRole('button', { name: /Review · m-review@high|Stage router|阶段路由/ })
+  const chip = page.getByRole('button', { name: /审查 · m-review@high/ })
   await chip.first().waitFor({ timeout: 60_000 })
-  const tail = page.getByText(/(本轮|This turn)：?:? .*Review/)
+  const chipText = await chip.first().textContent()
+  const tail = page.getByText(/^本轮：审查/)
   await tail.first().waitFor({ timeout: 30_000 })
   // The picker must keep showing the scheme, not the routed real model.
-  const picker = page.getByText(/Test \(stage-router\)/)
+  const picker = page.getByText(/测试（阶段路由）/)
   await picker.first().waitFor({ timeout: 10_000 })
   await chip.first().click()
   await page.getByRole('dialog').waitFor({ timeout: 10_000 })
@@ -24,15 +25,15 @@ try {
 
   // Lock to Plan from the panel (runs /stage plan through remote.commands),
   // then the next message must go to the plan model without judging.
-  await page.getByRole('dialog').getByRole('button', { name: 'Plan', exact: true }).click()
+  await page.getByRole('dialog').getByRole('button', { name: '规划', exact: true }).click()
   await page.getByRole('dialog').waitFor({ state: 'detached', timeout: 15_000 })
   await send(page, 'JUDGE=review second')
-  const lockedChip = page.getByRole('button', { name: /Plan · m-plan@max/ })
+  const lockedChip = page.getByRole('button', { name: /规划 · m-plan@max/ })
   await lockedChip.first().waitFor({ timeout: 60_000 })
   await page.screenshot({ path: shot })
   console.log(JSON.stringify({
     ok: true,
-    chip: await chip.first().textContent(),
+    chip: chipText,
     tail: await tail.first().textContent(),
     picker: await picker.first().textContent(),
     dialog,

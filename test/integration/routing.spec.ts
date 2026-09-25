@@ -87,7 +87,7 @@ describe('stage routing in a headless session', () => {
 
   it('falls back to the initial stage model when a stage model is missing', () => {
     expect(routes(turns[6]!)).toEqual(['fake/m-code@high'])
-    expect(mains(turns[6]!)[0]!.notices.at(-1)).toContain('stage "broken" (Broken), model fake/m-code')
+    expect(mains(turns[6]!)[0]!.notices.at(-1)).toContain('stage "broken" (损坏), model fake/m-code')
   })
 
   it('never lets dsh model-change notices reach the model', () => {
@@ -120,7 +120,7 @@ describe('stage routing in a headless session', () => {
 
   it('locks the stage with /stage, durably across reloads, and unlocks with /stage auto', () => {
     const commands = (turn: TurnResult) => turn.calls.filter(call => call.kind === 'command')
-    expect(commands(turns[11]!)).toEqual([expect.objectContaining({ args: 'plan', result: { kind: 'success', text: 'Stage locked to plan.' } })])
+    expect(commands(turns[11]!)).toEqual([expect.objectContaining({ args: 'plan', result: { kind: 'success', text: '已锁定到阶段「规划」。' } })])
     expect(routes(turns[12]!)).toEqual(['fake/m-plan@max'])
     expect(judges(turns[12]!)).toEqual([])
     expect(mains(turns[12]!)[0]!.notices.at(-1)).toContain('locked')
@@ -133,7 +133,7 @@ describe('stage routing in a headless session', () => {
 
   it('pins a planner task to a tier with /stage tier', () => {
     const command = turns[16]!.calls.find(call => call.kind === 'command')
-    expect(command?.result).toMatchObject({ kind: 'success', text: 'Task T1 pinned to heavy.' })
+    expect(command?.result).toMatchObject({ kind: 'success', text: '任务 T1 已指定为 heavy 档。' })
     expect(routes(turns[17]!)).toEqual(['fake/m-code@high', 'fake/m-heavy@max'])
   })
 })

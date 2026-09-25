@@ -16,9 +16,9 @@ describe('decide', () => {
   })
 
   it('applies event rules by source stage', () => {
-    expect(decide(at('code'), 'plan_mode_on', scheme)).toEqual({ kind: 'goto', stage: 'plan', reason: 'plan_mode_on' })
-    expect(decide(at('plan'), 'plan_approved', scheme)).toEqual({ kind: 'goto', stage: 'code', reason: 'plan_approved' })
-    expect(decide(at('code'), 'todos_done', scheme)).toEqual({ kind: 'goto', stage: 'review', reason: 'todos_done' })
+    expect(decide(at('code'), 'plan_mode_on', scheme)).toEqual({ kind: 'goto', stage: 'plan', reason: '开启计划模式' })
+    expect(decide(at('plan'), 'plan_approved', scheme)).toEqual({ kind: 'goto', stage: 'code', reason: '计划被批准' })
+    expect(decide(at('code'), 'todos_done', scheme)).toEqual({ kind: 'goto', stage: 'review', reason: '待办全部完成' })
   })
 
   it('stays when no rule matches the event from this stage', () => {
@@ -27,7 +27,7 @@ describe('decide', () => {
   })
 
   it('stays rather than re-entering the current stage', () => {
-    expect(decide(at('plan'), 'plan_mode_on', scheme)).toEqual({ kind: 'stay', reason: 'plan_mode_on' })
+    expect(decide(at('plan'), 'plan_mode_on', scheme)).toEqual({ kind: 'stay', reason: '开启计划模式' })
   })
 
   it('uses the first matching rule for non-message events', () => {
@@ -45,18 +45,18 @@ describe('decide', () => {
       { from: '*', to: 'code', on: 'user_message' },
     ])
     expect(decide(at('code'), 'user_message', two)).toEqual({ kind: 'judge', candidates: ['review', 'code'] })
-    expect(decide(at('plan'), 'user_message', two)).toEqual({ kind: 'goto', stage: 'code', reason: 'single candidate' })
+    expect(decide(at('plan'), 'user_message', two)).toEqual({ kind: 'goto', stage: 'code', reason: '规则只剩一个候选阶段' })
   })
 
   it('enters initialStage on the first message when no rule matches', () => {
     const none = withRules([{ from: 'code', to: 'review', on: 'user_message' }])
-    expect(decide(at(null), 'user_message', none)).toEqual({ kind: 'goto', stage: 'code', reason: 'initial' })
+    expect(decide(at(null), 'user_message', none)).toEqual({ kind: 'goto', stage: 'code', reason: '会话第一条消息，进入初始阶段' })
     expect(decide(at('plan'), 'user_message', none).kind).toBe('stay')
   })
 
   it('lets a manual lock win over every event', () => {
-    expect(decide(at('code', 'review'), 'user_message', scheme)).toEqual({ kind: 'goto', stage: 'review', reason: 'locked' })
-    expect(decide(at('review', 'review'), 'plan_mode_on', scheme)).toEqual({ kind: 'stay', reason: 'locked' })
+    expect(decide(at('code', 'review'), 'user_message', scheme)).toEqual({ kind: 'goto', stage: 'review', reason: '已锁定' })
+    expect(decide(at('review', 'review'), 'plan_mode_on', scheme)).toEqual({ kind: 'stay', reason: '已锁定' })
   })
 
   it('ignores a lock on a stage the scheme no longer has', () => {
@@ -74,7 +74,7 @@ describe('applyJudgement', () => {
   const ok = (stage: string, confidence = 0.9) => ({ ok: true as const, stage, confidence, reason: 'r' })
 
   it('moves to a confident candidate', () => {
-    expect(applyJudgement(at('code'), ok('plan'), candidates, 0.6, 'code')).toEqual({ kind: 'goto', stage: 'plan', reason: 'judge: r' })
+    expect(applyJudgement(at('code'), ok('plan'), candidates, 0.6, 'code')).toEqual({ kind: 'goto', stage: 'plan', reason: '判断器：r' })
   })
 
   it('stays on failure, low confidence or a non-candidate answer', () => {
@@ -85,7 +85,7 @@ describe('applyJudgement', () => {
 
   it('enters initialStage when the first message cannot be judged', () => {
     expect(applyJudgement(at(null), { ok: false, error: 'timeout' }, candidates, 0.6, 'code'))
-      .toEqual({ kind: 'goto', stage: 'code', reason: 'initial (judge failed: timeout)' })
+      .toEqual({ kind: 'goto', stage: 'code', reason: '会话第一条消息，进入初始阶段（判断失败：timeout）' })
   })
 
   it('stays when the judge picks the current stage', () => {

@@ -310,5 +310,7 @@ test/
 
 第 4 期实现中的发现（详见 `docs/superpowers/plans/2026-09-25-phase4-editor.md`）：
 - dsh 0.1.7 的设置服务只读写 `.volatile()` 字段，所以插件的 `Config` 把 `defaultJudge` 和 `schemes` 标成 volatile。保存后插件收到 `loader/volatile-update` 并刷新配置快照，不重启，各会话的路由状态保留。
-- 编辑器入口是 设置 → Built-in plugins → Stage router（`settings.plugins.tab` 插槽）。后端服务是 `TypertRemoteService`（命名空间 `stageRouter`），客户端经 `connection.rpc.call('/api', 'stageRouter/<方法>', { args })` 调用。
+- 编辑器入口是 设置 → 内置插件 → 阶段路由（`settings.plugins.tab` 插槽）。后端服务是 `TypertRemoteService`（命名空间 `stageRouter`），客户端经 `connection.rpc.call('/api', 'stageRouter/<方法>', { args })` 调用。
 - 保存走 `ctx.settings.replace`，带修订号，写入 profile 的 `cordis.patch.yml`；结构错误阻止保存，模型不可用只提醒。
+
+界面语言（第 4 期之后）：插件的所有界面文字只有中文，包括阶段标签、面板、每轮摘要、编辑器、`/stage` 命令的说明和回复、校验提示、路由原因和判断失败原因，以及选择器里「<方案名>（阶段路由）」这个名字。客户端的英文字典直接复用中文字典，所以 dsh 界面是英文时，本插件仍然显示中文。只写进日志的文字，以及只发给模型的文字（判断器提示词、阶段提示消息），保持英文。

@@ -31,13 +31,13 @@ describe('StageRouterAdapter', () => {
   it('lists one model per scheme', async () => {
     const { h } = host([example])
     expect(await new StageRouterAdapter(h).listModels('stage-router')).toEqual([{
-      provider: 'stage-router', id: 'dev-default', name: '研发默认 (stage-router)', description: '规划 → 编码 → 审查',
+      provider: 'stage-router', id: 'dev-default', name: '研发默认（阶段路由）', description: '规划 → 编码 → 审查',
     }])
   })
 
   it('rejects an unknown scheme', async () => {
     const { h } = host([example])
-    await expect(new StageRouterAdapter(h).resolveModel('stage-router', 'nope')).rejects.toThrow(/no scheme "nope"/)
+    await expect(new StageRouterAdapter(h).resolveModel('stage-router', 'nope')).rejects.toThrow(/没有方案「nope」/)
   })
 
   it('accepts images when any stage model does', async () => {

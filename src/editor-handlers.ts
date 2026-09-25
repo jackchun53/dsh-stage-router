@@ -80,12 +80,12 @@ export function createEditorHandlers(deps: EditorDeps) {
     async save(draft: unknown, expectedRevision: number | undefined): Promise<EditorConfigView & { warnings: ConfigIssue[] }> {
       const blocking = await checkDraft(draft)
       if (blocking.config === undefined || blocking.issues.length > 0) {
-        throw new RemoteError('stage-router/invalid', 'The configuration has errors.', { issues: blocking.issues })
+        throw new RemoteError('stage-router/invalid', '配置有错误，修正后才能保存。', { issues: blocking.issues })
       }
       const settings = deps.settings()
       const target = settings?.describe({ redactSecrets: true }).find(entry => entry.ns === SETTINGS_NS)
       if (settings === undefined || target === undefined) {
-        throw new RemoteError('stage-router/unavailable', 'This profile does not let the settings service edit stage-router.', {})
+        throw new RemoteError('stage-router/unavailable', '当前 profile 不允许设置服务修改 stage-router。', {})
       }
       try {
         await settings.replace(SETTINGS_NS, blocking.config, expectedRevision ?? target.revision)

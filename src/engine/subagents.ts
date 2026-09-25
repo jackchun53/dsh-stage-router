@@ -49,21 +49,21 @@ export async function routeChild(child: ChildView, parent: ParentView, deps: Chi
   // A child inherits the parent's last logged route; any other model was chosen on purpose.
   if (!sameModel(child.config, parent.route)) return undefined
   if (child.fork) {
-    return { route: parent.route, stage: parent.stage ?? parent.scheme.initialStage, reason: 'fork follows parent' }
+    return { route: parent.route, stage: parent.stage ?? parent.scheme.initialStage, reason: 'fork 出来的子 agent 跟随父会话' }
   }
   const stageId = settings.stage === 'inherit' ? parent.stage ?? parent.scheme.initialStage : settings.stage
   const stage = parent.scheme.stages.find(s => s.id === stageId)
   if (stage === undefined) return undefined
-  if (!hasTiers(stage)) return { route: stage.route, stage: stage.id, reason: 'stage route' }
+  if (!hasTiers(stage)) return { route: stage.route, stage: stage.id, reason: '阶段模型' }
 
   const tiers = stage.tiers!
   const texts = [child.label, child.task].filter((text): text is string => text !== undefined && text.trim() !== '')
   let tier: string | undefined
-  let reason = 'default tier'
+  let reason = '默认档'
   for (const text of texts) {
     tier = taskTier(stage, parent.todos, text)
     if (tier !== undefined) {
-      reason = `planner task [T${plannerTag(text).task}]`
+      reason = `规划任务 [T${plannerTag(text).task}] 的档位`
       break
     }
   }
@@ -74,7 +74,7 @@ export async function routeChild(child: ChildView, parent: ParentView, deps: Chi
     const expired = new Promise<undefined>(resolve => { timer = setTimeout(resolve, deps.waitMs ?? TIER_WAIT_MS, undefined) })
     tier = pending === undefined ? undefined : await Promise.race([pending, expired])
     clearTimeout(timer)
-    if (tier !== undefined) reason = 'judged task'
+    if (tier !== undefined) reason = '判断器定档'
   }
   tier ??= tiers.default ?? tiers.levels[0]!.id
   const level = tiers.levels.find(l => l.id === tier)

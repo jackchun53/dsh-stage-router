@@ -39,7 +39,7 @@ export function TransitionGraph({ scheme, t }: { scheme: SchemeConfig; t: T }) {
           return (
             <path key={`${edge.from}>${edge.to}`} d={`M${sx},${sy} Q${cx},${cy} ${ex},${ey}`} fill="none"
               stroke="currentColor" strokeOpacity={0.45} strokeWidth={1.2} markerEnd="url(#stage-router-arrow)">
-              <title>{`${edge.from} → ${edge.to}: ${edge.on.map(on => t(`event.${on}`)).join(', ')}`}</title>
+              <title>{`${edge.from} → ${edge.to}：${edge.on.map(on => t(`event.${on}`)).join('、')}`}</title>
             </path>
           )
         })}

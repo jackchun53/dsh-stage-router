@@ -8,3 +8,12 @@ export const TRANSITION_EVENTS = ['user_message', 'plan_mode_on', 'plan_mode_off
 
 /** Wildcard stage reference in transitions. */
 export const ANY_STAGE = '*'
+
+/** Chinese labels for transition events, shown in reasons and the editor. */
+export const EVENT_LABELS: Record<(typeof TRANSITION_EVENTS)[number], string> = {
+  user_message: '用户消息',
+  plan_mode_on: '开启计划模式',
+  plan_mode_off: '关闭计划模式',
+  plan_approved: '计划被批准',
+  todos_done: '待办全部完成',
+}

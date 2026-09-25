@@ -36,7 +36,7 @@ export interface EditorApi {
 export function createEditorApi(connection: () => RpcConnection | undefined): EditorApi {
   const call = async <T>(method: string, args: Record<string, unknown>): Promise<T> => {
     const handle = connection()
-    if (handle === undefined) throw new EditorApiError('stage-router/offline', 'The Web connection is not ready.')
+    if (handle === undefined) throw new EditorApiError('stage-router/offline', 'Web 连接尚未就绪。')
     let result
     try {
       result = await handle.rpc.call('/api', `stageRouter/${method}`, { args })

@@ -119,7 +119,7 @@ function StageCard({ stage, index, count, path, issues, catalog, t, readonly, on
           <span style={styles.muted}>{t('field.levels')}</span>
           {tiers.levels.map((level, li) => (
             <div key={li} style={{ ...styles.row, alignItems: 'flex-start' }}>
-              <TextInput ariaLabel={`${label} · tier ${li + 1} · ${t('field.id')}`} value={level.id} disabled={readonly}
+              <TextInput ariaLabel={`${label} · 档位 ${li + 1} · ${t('field.id')}`} value={level.id} disabled={readonly}
                 onCommit={id => {
                   if (id === '' || tiers.levels.some(l => l.id === id)) return
                   setTiers({
@@ -127,7 +127,7 @@ function StageCard({ stage, index, count, path, issues, catalog, t, readonly, on
                     ...tiers.default === level.id ? { default: id } : {},
                   })
                 }} />
-              <TextInput ariaLabel={`${label} · tier ${li + 1} · ${t('field.description')}`} value={level.description} disabled={readonly}
+              <TextInput ariaLabel={`${label} · 档位 ${li + 1} · ${t('field.description')}`} value={level.description} disabled={readonly}
                 onChange={description => setTiers({ levels: tiers.levels.map((l, i) => i === li ? { ...l, description } : l) })} />
               <RoutePicker label={`${label} · ${level.id}`} route={level.route} catalog={catalog} t={t} disabled={readonly}
                 onChange={route => setTiers({ levels: tiers.levels.map((l, i) => i === li ? { ...l, route } : l) })} />

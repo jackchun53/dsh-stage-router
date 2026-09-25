@@ -53,22 +53,22 @@ describe('routeChild', () => {
 
   it('lets a fork follow the parent route', async () => {
     expect(await routeChild(child({ fork: true, config: review }), parent(scheme(), 'review', review), deps()))
-      .toEqual({ route: review, stage: 'review', reason: 'fork follows parent' })
+      .toEqual({ route: review, stage: 'review', reason: 'fork 出来的子 agent 跟随父会话' })
   })
 
   it('uses the tier of the parent todo named by a [Tn] prefix', async () => {
     const todos = [{ content: '[T2][light] rename helper', status: 'in_progress' }]
     const d = deps()
     expect(await routeChild(child({ label: '[T2] rename', task: 'rename it' }), parent(scheme(), 'code', flash, todos), d))
-      .toMatchObject({ route: light, stage: 'code', tier: 'light', reason: 'planner task [T2]' })
+      .toMatchObject({ route: light, stage: 'code', tier: 'light', reason: '规划任务 [T2] 的档位' })
     expect(d.classified).toEqual([])
   })
 
   it('judges the task when there is no tag, else falls back to the default tier', async () => {
     expect(await routeChild(child({ task: 'tiny fix' }), parent(scheme(), 'code'), deps({ 'tiny fix': 'light' })))
-      .toMatchObject({ route: light, tier: 'light', reason: 'judged task' })
+      .toMatchObject({ route: light, tier: 'light', reason: '判断器定档' })
     expect(await routeChild(child({ task: 'unknown' }), parent(scheme(), 'code'), deps()))
-      .toMatchObject({ route: heavy, tier: 'heavy', reason: 'default tier' })
+      .toMatchObject({ route: heavy, tier: 'heavy', reason: '默认档' })
     const noClassify = deps({ 'tiny fix': 'light' })
     expect(await routeChild(child({ task: 'tiny fix' }), parent(scheme({ classify: false }), 'code'), noClassify))
       .toMatchObject({ tier: 'heavy' })
@@ -77,7 +77,7 @@ describe('routeChild', () => {
 
   it('uses a fixed stage when configured, with that stage route when it has no tiers', async () => {
     expect(await routeChild(child(), parent(scheme({ stage: 'review' }), 'code'), deps()))
-      .toEqual({ route: review, stage: 'review', reason: 'stage route' })
+      .toEqual({ route: review, stage: 'review', reason: '阶段模型' })
   })
 
   it('falls back to the stage route when the tier model is unusable', async () => {

@@ -144,7 +144,7 @@ function TryIt({ draft, scheme, api, t }: { draft: StageRouterConfig; scheme: Sc
       {result !== null && (
         <div role="status" style={{ display: 'grid', gap: 4, fontSize: 13 }}>
           <Issues issues={result.issues} />
-          {result.candidates.length > 0 && <span>{t('try.candidates', { list: result.candidates.map(name).join(', ') })}</span>}
+          {result.candidates.length > 0 && <span>{t('try.candidates', { list: result.candidates.map(name).join('、') })}</span>}
           {judgement === undefined
             ? <span style={styles.muted}>{t('try.noJudge')}</span>
             : judgement.ok

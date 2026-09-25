@@ -32,7 +32,7 @@ describe('checkDraft', () => {
   it('turns a schema error into a field issue', async () => {
     const { config, issues } = await checkDraft({ schemes: [{ id: 'x', stages: [] }] })
     expect(config).toBeUndefined()
-    expect(issues).toEqual([{ path: 'schemes[0].initialStage', message: 'missing required value' }])
+    expect(issues).toEqual([{ path: 'schemes[0].initialStage', message: '缺少必填项' }])
   })
 
   it('reports structural issues and unusable or empty models by path', async () => {
@@ -46,7 +46,7 @@ describe('checkDraft', () => {
       'schemes[0].stages[1].tiers.levels[1].route',
       'schemes[0].stages[2].route',
     ]))
-    expect(issues.find(i => i.path === 'schemes[0].stages[0].route')!.message).toBe('choose a model')
+    expect(issues.find(i => i.path === 'schemes[0].stages[0].route')!.message).toBe('请选择模型')
   })
 
   it('checks the default judge model', async () => {
@@ -61,7 +61,7 @@ describe('tryJudge', () => {
     const result = await tryJudge(stream, { draft, scheme: 'dev-default', current: 'code', message: 'how should we structure this?' })
     expect(result.candidates).toEqual(['plan', 'code', 'review'])
     expect(result.judgement).toMatchObject({ ok: true, stage: 'plan', confidence: 0.8 })
-    expect(result.decision).toEqual({ kind: 'goto', stage: 'plan', reason: 'judge: design talk' })
+    expect(result.decision).toEqual({ kind: 'goto', stage: 'plan', reason: '判断器：design talk' })
     expect(calls[0]).toMatchObject({ provider: 'deepseek-official', model: 'deepseek-flash' })
     expect(calls[0]).not.toHaveProperty('sessionId')
   })
@@ -84,7 +84,7 @@ describe('tryJudge', () => {
 
   it('reports an unknown scheme or an invalid draft', async () => {
     const { stream } = replying('{}')
-    expect((await tryJudge(stream, { draft, scheme: 'nope', current: null, message: 'x' })).decision).toEqual({ kind: 'stay', reason: 'unknown scheme "nope"' })
+    expect((await tryJudge(stream, { draft, scheme: 'nope', current: null, message: 'x' })).decision).toEqual({ kind: 'stay', reason: '没有方案「nope」' })
     expect((await tryJudge(stream, { draft: { schemes: [{}] }, scheme: 'x', current: null, message: 'x' })).issues).toHaveLength(1)
   })
 })

@@ -252,12 +252,12 @@ export function apply(ctx: Context, live: Config): void {
   ctx.inject(['commands'], commandCtx => {
     commandCtx.commands.register({
       name: STAGE_COMMAND,
-      description: 'stage-router: show the stage (/stage), recent decisions (/stage log), lock a stage (/stage <id>), '
-        + 'route automatically (/stage auto), or pin a task tier (/stage tier T<n> <tier|auto>)',
-      input: { hint: '[<stage id> | auto | log | tier T<n> <tier>]' },
+      description: '阶段路由：查看当前阶段（/stage）、最近的路由决策（/stage log），锁定阶段（/stage <阶段 ID>）、'
+        + '恢复自动（/stage auto），或指定任务档位（/stage tier T<n> <档位|auto>）',
+      input: { hint: '[<阶段 ID> | auto | log | tier T<n> <档位>]' },
       handler: ({ agent, rawInput }) => {
         const scheme = schemeFor(agent)
-        if (scheme === undefined) return { kind: 'error', text: 'This session is not routed by a stage-router scheme.' }
+        if (scheme === undefined) return { kind: 'error', text: '当前会话没有使用阶段路由方案。' }
         const router = routerFor(agent, scheme)
         const command = parseStageCommand(rawInput)
         switch (command.kind) {
@@ -267,28 +267,28 @@ export function apply(ctx: Context, live: Config): void {
             return { kind: 'success', text: router.describe() }
           case 'log': {
             const recent = decisions.recent(agent.session.id, 10)
-            if (recent.length === 0) return { kind: 'success', text: 'No routing decisions in this host process yet.' }
+            if (recent.length === 0) return { kind: 'success', text: '当前进程里还没有路由决策记录。' }
             return {
               kind: 'success',
-              text: recent.map(d => `turn ${d.turn}.${d.step}: ${d.stage}${d.tier === null ? '' : ` · ${d.tier}`} → `
-                + `${d.route.provider}/${d.route.model} (${d.reason})`).join('\n'),
+              text: recent.map(d => `第 ${d.turn} 轮第 ${d.step} 步：${d.stage}${d.tier === null ? '' : ` · ${d.tier}`} → `
+                + `${d.route.provider}/${d.route.model}（${d.reason}）`).join('\n'),
             }
           }
           case 'lock': {
             if (command.stage !== null && !scheme.stages.some(stage => stage.id === command.stage)) {
-              return { kind: 'error', text: `Unknown stage "${command.stage}". Stages: ${scheme.stages.map(stage => stage.id).join(', ')}.` }
+              return { kind: 'error', text: `没有阶段「${command.stage}」。可用阶段：${scheme.stages.map(stage => stage.id).join('、')}。` }
             }
             applyEffect(agent, router.setLock(command.stage))
             log('info', 'stage-router: %s %s', agent.session.id, command.stage === null ? 'unlocked' : `locked to ${command.stage}`)
-            return { kind: 'success', text: command.stage === null ? 'Stage routing is automatic again.' : `Stage locked to ${command.stage}.` }
+            return { kind: 'success', text: command.stage === null ? '已恢复自动路由。' : `已锁定到阶段「${scheme.stages.find(stage => stage.id === command.stage)?.name || command.stage}」。` }
           }
           case 'tier': {
             const known = new Set(scheme.stages.flatMap(stage => stage.tiers?.levels.map(level => level.id) ?? []))
             if (command.tier !== null && !known.has(command.tier)) {
-              return { kind: 'error', text: `Unknown tier "${command.tier}". Tiers: ${[...known].join(', ') || '(none configured)'}.` }
+              return { kind: 'error', text: `没有档位「${command.tier}」。可用档位：${[...known].join('、') || '（未配置）'}。` }
             }
             router.setTierOverride(command.task, command.tier)
-            return { kind: 'success', text: command.tier === null ? `Task T${command.task} tier is automatic again.` : `Task T${command.task} pinned to ${command.tier}.` }
+            return { kind: 'success', text: command.tier === null ? `任务 T${command.task} 已恢复自动定档。` : `任务 T${command.task} 已指定为 ${command.tier} 档。` }
           }
         }
       },
@@ -487,7 +487,7 @@ export function apply(ctx: Context, live: Config): void {
           stage: source?.stage ?? '(subagent)',
           tier: source?.tier ?? null,
           route,
-          reason: source?.lastReason ?? (child != null ? 'subagent' : 'virtual model fallback'),
+          reason: source?.lastReason ?? (child != null ? '子 agent' : '虚拟模型兜底'),
           lock: source?.lock ?? null,
           judge: source?.lastJudgement ?? null,
         })

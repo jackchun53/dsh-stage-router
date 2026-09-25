@@ -14,7 +14,7 @@
 - 输入框右侧的阶段标签；
 - 回复下方的每轮摘要；
 - `/stage` 命令卡片；
-- 模型选择器始终显示 `Test (stage-router)`。
+- 模型选择器始终显示「测试（阶段路由）」。
 
 ## 做了什么
 
@@ -26,7 +26,7 @@
 | 决策记录：每个会话在内存里保留最近 50 条，供 `/stage log` 查看 | `src/engine/decisions.ts` |
 | 投影补充：阶段名、阶段列表、每轮起止阶段和模型（最近 20 轮）、按任务改档表；`stateVersion` 升到 2 | `src/engine/state.ts` |
 | 前后端共享的类型和 `/stage` 参数解析，不依赖任何后端代码 | `src/shared/wire.ts` |
-| Web 端：输入框右侧的阶段标签和面板、每轮摘要、中英文文案 | `src/client/*` |
+| Web 端：输入框右侧的阶段标签和面板、每轮摘要、中文文案 | `src/client/*` |
 | 客户端打包：CommonJS 单文件，用 `window.__ModuleLoader__.load` 包装，只 `require` 平台模块表里的模块 | `scripts/build-client.mjs`、`scripts/platform-modules.mjs` |
 | 测试：组件测试（jsdom）、按宿主方式加载打包产物的测试、Web 端到端测试 | `test/client/*`、`test/e2e/web-ui.mjs` |
 

@@ -21,7 +21,8 @@ function schemaIssue(error: unknown): ConfigIssue {
   const dotted = path === undefined
     ? ''
     : path.map((part, i) => typeof part === 'number' ? `[${part}]` : `${i === 0 ? '' : '.'}${part}`).join('')
-  const message = error instanceof Error ? error.message.replace(/^\$\S*\s*/, '') : String(error)
+  const raw = error instanceof Error ? error.message.replace(/^\$\S*\s*/, '') : String(error)
+  const message = raw === 'missing required value' ? '缺少必填项' : `格式不正确：${raw}`
   return { path: dotted, message }
 }
 
@@ -41,10 +42,10 @@ export async function checkDraft(input: unknown, usable?: (route: RouteConfig) =
     for (const [index, scheme] of config.schemes.entries()) {
       const routes = schemeRoutes(scheme, `schemes[${index}]`).filter(({ route }) => route.provider !== '' && route.model !== '')
       issues.push(...await checkRoutes(routes, async route =>
-        (await usable(route)) ? undefined : `model ${route.provider}/${route.model} is unavailable`))
+        (await usable(route)) ? undefined : `模型 ${route.provider}/${route.model} 当前不可用`))
     }
     const judge = config.defaultJudge.route
-    if (!(await usable(judge))) issues.push({ path: 'defaultJudge.route', message: `model ${judge.provider}/${judge.model} is unavailable` })
+    if (!(await usable(judge))) issues.push({ path: 'defaultJudge.route', message: `模型 ${judge.provider}/${judge.model} 当前不可用` })
   }
   return { config, issues }
 }
@@ -74,7 +75,7 @@ export async function tryJudge(stream: StreamFn, input: TryJudgeInput): Promise<
   if (config === undefined || scheme === undefined) {
     return {
       candidates: [],
-      decision: { kind: 'stay', reason: scheme === undefined && config !== undefined ? `unknown scheme "${input.scheme}"` : 'invalid draft' },
+      decision: { kind: 'stay', reason: scheme === undefined && config !== undefined ? `没有方案「${input.scheme}」` : '配置有误' },
       issues,
     }
   }

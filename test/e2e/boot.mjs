@@ -1,4 +1,4 @@
-// Shared boot for the Web e2e scripts: an isolated DSH_HOME with this package
+// Shared boot for the Web e2e scripts (browser locale zh-CN, so dsh and the plugin are both Chinese): an isolated DSH_HOME with this package
 // installed into the web profile, the fake provider and the test scheme from
 // the integration fixtures, `dsh web` on a free port, and headless Chromium.
 import { spawn, spawnSync } from 'node:child_process'
@@ -54,7 +54,7 @@ ${schemeConfig}`)
   })
 
   const browser = await chromium.launch()
-  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } })
+  const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, locale: 'zh-CN' })
   const errors = []
   page.on('pageerror', error => errors.push(`pageerror: ${error.message}`))
   page.on('console', message => { if (message.type() === 'error') errors.push(`console: ${message.text()}`) })

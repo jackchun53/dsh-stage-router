@@ -30,10 +30,10 @@ describe('foldStageState', () => {
     const state = fold([
       asEvent(notice('code')),
       asEvent(notice('review', { from: 'code', judge })),
-      asEvent(notice('plan', { from: 'review', lock: 'plan', reason: 'locked' })),
+      asEvent(notice('plan', { from: 'review', lock: 'plan', reason: '已锁定' })),
     ])
     expect(state).toEqual({
-      ...INITIAL_STATE, scheme: 'dev', stage: 'plan', stageName: 'plan', lock: 'plan', route, reason: 'locked', notices: 3,
+      ...INITIAL_STATE, scheme: 'dev', stage: 'plan', stageName: 'plan', lock: 'plan', route, reason: '已锁定', notices: 3,
     })
   })
 

@@ -20,7 +20,7 @@ type Tab = 'basic' | 'stages' | 'transitions' | 'judge'
 const TABS: Tab[] = ['basic', 'stages', 'transitions', 'judge']
 
 /** Issues produced by model availability checks; they warn but do not block saving. */
-const isWarning = (issue: ConfigIssue) => /is unavailable$/.test(issue.message)
+const isWarning = (issue: ConfigIssue) => /当前不可用$/.test(issue.message)
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 

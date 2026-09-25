@@ -25,18 +25,18 @@
           promptTemplate: null
         schemes:
           - id: test
-            name: Test
+            name: 测试
             initialStage: code
             subagents: { enabled: true, stage: inherit, classify: true }
             stages:
               - id: plan
-                name: Plan
+                name: 规划
                 description: design and planning
                 route: { provider: fake, model: m-plan, reasoningEffort: max }
                 prompt: STAGE_PROMPT_PLAN
                 planMode: enter
               - id: code
-                name: Code
+                name: 编码
                 description: write code
                 route: { provider: fake, model: m-code }
                 planMode: exit
@@ -47,12 +47,12 @@
                     - { id: light, description: local change, route: { provider: fake, model: m-light, reasoningEffort: 'off' } }
                     - { id: heavy, description: cross-module work, route: { provider: fake, model: m-heavy, reasoningEffort: max } }
               - id: review
-                name: Review
+                name: 审查
                 description: review changes
                 route: { provider: fake, model: m-review, reasoningEffort: high }
                 prompt: STAGE_PROMPT_REVIEW
               - id: broken
-                name: Broken
+                name: 损坏
                 description: stage whose model is missing
                 route: { provider: fake, model: m-missing }
             transitions:

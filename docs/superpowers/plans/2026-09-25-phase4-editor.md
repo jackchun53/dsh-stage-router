@@ -5,7 +5,7 @@
 
 ![编辑器截图](assets/phase4-editor.png)
 
-入口：设置 → Built-in plugins（内置插件）→ Stage router 标签页。
+入口：设置 → 内置插件 → 阶段路由 标签页。截图是在浏览器语言设为中文时拍的，dsh 自己的界面也显示中文。
 
 ## 做了什么
 
@@ -40,7 +40,7 @@ dsh plugin --profile web add <本仓库路径>
 dsh web
 ```
 
-打开 设置 → Built-in plugins → Stage router：
+打开 设置 → 内置插件 → 阶段路由：
 - 下拉框里应该能看到你配置过的 DeepSeek 模型；
 - 在「试一试」里输入一句话，看判断器的选择和置信度；
 - 保存后，模型选择器里的方案名会立即更新。
