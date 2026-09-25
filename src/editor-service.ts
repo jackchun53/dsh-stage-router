@@ -39,10 +39,9 @@ export async function checkDraft(input: unknown, usable?: (route: RouteConfig) =
   const issues = validateConfig(config)
   if (usable !== undefined) {
     for (const [index, scheme] of config.schemes.entries()) {
-      issues.push(...await checkRoutes(schemeRoutes(scheme, `schemes[${index}]`), async route => {
-        if (route.provider === '' || route.model === '') return 'choose a model'
-        return (await usable(route)) ? undefined : `model ${route.provider}/${route.model} is unavailable`
-      }))
+      const routes = schemeRoutes(scheme, `schemes[${index}]`).filter(({ route }) => route.provider !== '' && route.model !== '')
+      issues.push(...await checkRoutes(routes, async route =>
+        (await usable(route)) ? undefined : `model ${route.provider}/${route.model} is unavailable`))
     }
     const judge = config.defaultJudge.route
     if (!(await usable(judge))) issues.push({ path: 'defaultJudge.route', message: `model ${judge.provider}/${judge.model} is unavailable` })

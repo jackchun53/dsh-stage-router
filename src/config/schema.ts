@@ -1,4 +1,7 @@
 import z from '@deepseek-ai/schemastery'
+import { ANY_STAGE, PLAN_MODE_ACTIONS, TIER_SOURCES, TRANSITION_EVENTS } from './constants.js'
+
+export { ANY_STAGE, PLAN_MODE_ACTIONS, TIER_SOURCES, TRANSITION_EVENTS } from './constants.js'
 
 /** A concrete model route: one provider/model pair plus an optional reasoning effort. */
 export interface RouteConfig {
@@ -23,7 +26,6 @@ export interface JudgeConfig {
 /** Per-scheme judge override: any subset of {@link JudgeConfig}. */
 export type JudgeOverride = Partial<JudgeConfig>
 
-export const TIER_SOURCES = ['planner', 'judge', 'planner-then-judge'] as const
 export type TierSource = typeof TIER_SOURCES[number]
 
 export interface TierLevel {
@@ -40,7 +42,6 @@ export interface TiersConfig {
   levels: TierLevel[]
 }
 
-export const PLAN_MODE_ACTIONS = ['enter', 'exit', 'keep'] as const
 export type PlanModeAction = typeof PLAN_MODE_ACTIONS[number]
 
 export interface StageConfig {
@@ -55,11 +56,8 @@ export interface StageConfig {
   tiers?: TiersConfig
 }
 
-export const TRANSITION_EVENTS = ['user_message', 'plan_mode_on', 'plan_mode_off', 'plan_approved', 'todos_done'] as const
 export type TransitionEvent = typeof TRANSITION_EVENTS[number]
 
-/** Wildcard stage reference in transitions. */
-export const ANY_STAGE = '*'
 
 export interface TransitionConfig {
   /** Source stage id or `*`. */

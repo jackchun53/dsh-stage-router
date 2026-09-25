@@ -38,6 +38,9 @@ export function validateScheme(scheme: SchemeConfig, base = 'scheme'): ConfigIss
   })
   const sub = scheme.subagents.stage
   if (sub !== 'inherit' && !ids.has(sub)) issue('subagents.stage', `unknown stage "${sub}"`)
+  for (const { path, route } of schemeRoutes(scheme, base)) {
+    if (route.provider.trim() === '' || route.model.trim() === '') issues.push({ path, message: 'choose a model' })
+  }
   return issues
 }
 

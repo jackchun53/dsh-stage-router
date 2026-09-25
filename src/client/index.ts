@@ -14,6 +14,9 @@ import type {} from '@deepseek-ai/dsh-client-ui-chat/client'
 import { en, zh, type StageRouterKey } from './locales.js'
 import { StageChip, type StageChipInjected } from './StageChip.js'
 import { TurnTail } from './TurnTail.js'
+import { createEditorApi, type RpcConnection } from './editor/api.js'
+import { StageRouterEditor, type EditorInjected } from './editor/Editor.js'
+import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -57,6 +60,26 @@ export function apply(ctx: ClientContext): void {
       },
     }),
   }, StageChip))
+
+  // The settings editor talks to the host's stageRouter/* remote over the
+  // client connection; optional too, the editor reports when it is missing.
+  let connection: RpcConnection | undefined
+  ctx.inject(['connection'], connectionCtx => {
+    connectionCtx.effect(() => {
+      connection = (connectionCtx as unknown as { connection: RpcConnection }).connection
+      return () => { connection = undefined }
+    }, 'stage-router: connection')
+  })
+  const api = createEditorApi(() => connection)
+  const label = ctx.locale.bind(NS)
+  ctx.slots.inject('settings.plugins.tab', () => ctx.slots.register({
+    name: 'settings.plugins.tab',
+    id: ID,
+    order: 50,
+    label: () => label('editor.tab'),
+    locale: NS,
+    inject: (): EditorInjected => ({ api }),
+  }, StageRouterEditor))
 
   ctx.slots.inject('conversation.chat.turnTail', () => ctx.slots.register({
     name: 'conversation.chat.turnTail',

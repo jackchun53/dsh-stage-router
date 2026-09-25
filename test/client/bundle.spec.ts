@@ -33,7 +33,7 @@ function fakeContext(execute: (sessionId: string, line: string) => Promise<unkno
   const locales: string[] = []
   const ctx = {
     effect: (fn: () => unknown) => { fn() },
-    locale: { register: (ns: string) => { locales.push(ns); return () => {} } },
+    locale: { register: (ns: string) => { locales.push(ns); return () => {} }, bind: () => (key: string) => key },
     slots: {
       inject: (_name: string, cb: () => void) => cb(),
       register: (options: Record<string, unknown>, component: unknown) => { registrations.push({ options, component }); return () => {} },
@@ -41,6 +41,7 @@ function fakeContext(execute: (sessionId: string, line: string) => Promise<unkno
     inject: (_deps: string[], cb: (c: unknown) => void) => cb({
       effect: (fn: () => unknown) => { fn() },
       remote: { commands: { execute: (sessionId: string, line: string) => execute(sessionId, line) } },
+      connection: { rpc: { call: async (channel: string, endpoint: string, payload: unknown) => ({ ok: true, value: { channel, endpoint, payload } }) } },
     }),
   }
   return { ctx, registrations, locales }
@@ -66,8 +67,13 @@ describe('lib/client.js', () => {
     expect(locales).toEqual(['stage-router'])
     expect(registrations.map(r => [r.options.name, r.options.id])).toEqual([
       ['conversation.input.right', 'dsh-stage-router'],
+      ['settings.plugins.tab', 'dsh-stage-router'],
       ['conversation.chat.turnTail', 'dsh-stage-router'],
     ])
+    const tab = registrations[1]!.options
+    expect((tab.label as () => string)()).toBe('editor.tab')
+    const { api } = (tab.inject as () => { api: { getConfig: () => Promise<unknown> } })()
+    expect(await api.getConfig()).toEqual({ channel: '/api', endpoint: 'stageRouter/getConfig', payload: { args: {} } })
     const face = (registrations[0]!.options.inject as (sessionId: string) => { runStage: (args: string) => Promise<string | null> })('s1')
     expect(await face.runStage('review')).toBeNull()
     expect(await face.runStage('nope')).toBe('Unknown stage "nope".')
