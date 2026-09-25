@@ -26,7 +26,7 @@ export type TimedJudgement = Judgement & { elapsedMs: number }
 /** Each recent-conversation segment is clipped to this many characters. */
 export const SEGMENT_LIMIT = 800
 
-const JUDGE_SYSTEM = 'You are a routing classifier for a coding assistant. Reply with a single JSON object and nothing else.'
+export const JUDGE_SYSTEM = 'You are a routing classifier for a coding assistant. Reply with a single JSON object and nothing else.'
 
 export function clip(text: string, limit = SEGMENT_LIMIT): string {
   const trimmed = text.trim()
@@ -68,7 +68,7 @@ export function renderPrompt(template: string | null, input: JudgeInput): string
 }
 
 /** First balanced `{…}` object in `text`, ignoring braces inside strings. */
-function firstObject(text: string): string | undefined {
+export function firstObject(text: string): string | undefined {
   const start = text.indexOf('{')
   if (start < 0) return undefined
   let depth = 0
