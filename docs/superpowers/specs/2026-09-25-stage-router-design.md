@@ -1,6 +1,6 @@
 # dsh-stage-router 设计文档
 
-> 状态：设计已确认（2026-09-25）；已按 dsh 0.1.7 修订（见 §9）；第 0 期验证已完成，六项全部通过（见 `docs/superpowers/plans/2026-09-25-phase0-spikes.md`）。
+> 状态：第 0～4 期全部实现（2026-09-25），各期记录见 `docs/superpowers/plans/`；与本文不同之处以 §9 的修订记录为准。
 > 目标版本：`@deepseek-ai/dsh@0.1.7-rc.2`（源码 deepseek-harness `477b4f4`）。实施计划见 `docs/superpowers/plans/`。
 
 ## Context
@@ -307,3 +307,8 @@ test/
 - 外部插件不能加入 dsh 的类型化远程接口，所以第 3 期的操作都走 `/stage` 命令，展示数据走投影。第 4 期的「试一试」再用 `TypertRemoteService` 加 `connection.rpc.call`。
 - 客户端包的格式：CommonJS 单文件，用 `window.__ModuleLoader__.load` 包装，只能 `require` 平台模块表里的模块；`package.json` 需要 `exports["./client"]` 和 `dsh.client.platform: "web"`。客户端入口激活失败会让整个 Web 端起不来，所以顶层只依赖 `slots` 和 `locale`。
 - Web 端用默认模型的会话，本插件会在第一次路由时写一条 `model/selection`（方案），让选择器一直显示虚拟方案。
+
+第 4 期实现中的发现（详见 `docs/superpowers/plans/2026-09-25-phase4-editor.md`）：
+- dsh 0.1.7 的设置服务只读写 `.volatile()` 字段，所以插件的 `Config` 把 `defaultJudge` 和 `schemes` 标成 volatile。保存后插件收到 `loader/volatile-update` 并刷新配置快照，不重启，各会话的路由状态保留。
+- 编辑器入口是 设置 → Built-in plugins → Stage router（`settings.plugins.tab` 插槽）。后端服务是 `TypertRemoteService`（命名空间 `stageRouter`），客户端经 `connection.rpc.call('/api', 'stageRouter/<方法>', { args })` 调用。
+- 保存走 `ctx.settings.replace`，带修订号，写入 profile 的 `cordis.patch.yml`；结构错误阻止保存，模型不可用只提醒。
