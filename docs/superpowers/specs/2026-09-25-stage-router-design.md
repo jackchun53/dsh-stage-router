@@ -205,7 +205,7 @@ stage-router:
 **对话里的展示**
 - **输入框右侧小标签**（`conversation.input.right`）：只在选用了本插件方案的会话里显示，例如 `编码 · heavy · v4-pro`。点开是一个面板：最近一次判断的原因和置信度、锁定或解锁阶段、按任务手动改档。
 - **每轮末尾摘要**（`conversation.chat.turnTail`）：例如 `本轮：规划 → 编码（v4-pro → v4-flash）`。
-- **命令**：`/stage <id>` 和 `/stage auto`，用 `ctx.commands.register({name, description, input, handler})` 注册（`interaction/commands/src/index.ts:285`），写法与计划模式的 `/plan` 相同。
+- **命令**：`/stage`（状态）、`/stage log`（最近决策）、`/stage <id>`（锁定）、`/stage auto`（恢复自动）、`/stage tier T<n> <档位|auto>`（按任务改档），用 `ctx.commands.register` 注册（`interaction/commands/src/index.ts:285`）。锁定和改档折叠 dsh 自己写的 `command/run` + `command/done` 事件持久化，命令成功即生效。面板上的操作也走这个命令，通过 `ctx.remote.commands.execute` 调用。
 - 插槽组件从 props 里拿 `useProjection` 读 `stage-router` 投影（参考 `client/ui-plan/src/client/PlanModeControl.tsx:19`）。
 
 ## 5. 错误处理
@@ -302,3 +302,8 @@ test/
 第 2 期实现中的发现（详见 `docs/superpowers/plans/2026-09-25-phase2-tiers-subagents.md`）：
 - 子 agent 继承父会话**最近一次记录的请求头**（`subagent/subagent/src/child-agent.ts:69-86`），而本插件改写后那里是真实模型，所以子 agent 必须按会话头识别，不能靠虚拟 provider。
 - 分档判断在每次组装系统提示词时启动（有缓存，不重复判断），定档在同一次组装里完成，最多等 1.5 秒。
+
+第 3 期实现中的发现（详见 `docs/superpowers/plans/2026-09-25-phase3-conversation-ui.md`）：
+- 外部插件不能加入 dsh 的类型化远程接口，所以第 3 期的操作都走 `/stage` 命令，展示数据走投影。第 4 期的「试一试」再用 `TypertRemoteService` 加 `connection.rpc.call`。
+- 客户端包的格式：CommonJS 单文件，用 `window.__ModuleLoader__.load` 包装，只能 `require` 平台模块表里的模块；`package.json` 需要 `exports["./client"]` 和 `dsh.client.platform: "web"`。客户端入口激活失败会让整个 Web 端起不来，所以顶层只依赖 `slots` 和 `locale`。
+- Web 端用默认模型的会话，本插件会在第一次路由时写一条 `model/selection`（方案），让选择器一直显示虚拟方案。

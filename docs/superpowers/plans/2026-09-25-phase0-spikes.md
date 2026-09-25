@@ -59,5 +59,5 @@ SPIKE_FILTER=0 node run.mjs short                    # 对照：不过滤模型�
 ## 需要你本地复核的项
 
 用 `dsh plugin --profile web add <本仓库>/spikes` 安装，或者用 `dsh web --patch spikes/spike.patch.yml` 启动，然后确认：
-- [ ] 输入 `/` 后，命令面板里能看到 `/stage`，执行后有成功提示；
-- [ ] 模型选择器里能选 `stage-router/spike`，而且能发送带图片的消息。
+- [x] ~~执行 `/stage` 后有成功提示~~：第 3 期的 `pnpm test:web` 已在真实 Web 端通过面板执行 `/stage plan`，对话里出现了命令卡片。输入 `/` 后命令面板里能否看到 `/stage` 尚未单独确认；
+- [x] ~~模型选择器里能选到方案~~：`pnpm test:web` 中选择器显示 `Test (stage-router)`。发送带图片的消息尚未确认。
