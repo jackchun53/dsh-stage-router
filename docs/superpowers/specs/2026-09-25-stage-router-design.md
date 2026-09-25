@@ -1,6 +1,6 @@
 # dsh-stage-router 设计文档
 
-> 状态：设计已确认（2026-09-25）；已按 dsh 0.1.7 修订（见 §9），第 0 期验证中。
+> 状态：设计已确认（2026-09-25）；已按 dsh 0.1.7 修订（见 §9）；第 0 期验证已完成，六项全部通过（见 `docs/superpowers/plans/2026-09-25-phase0-spikes.md`）。
 > 目标版本：`@deepseek-ai/dsh@0.1.7-rc.2`（源码 deepseek-harness `477b4f4`）。实施计划见 `docs/superpowers/plans/`。
 
 ## Context
@@ -48,14 +48,14 @@ skill-vault 客户端的「预设模型」（`skill-vault/packages/dsh-plugin`�
 | `agent/inbox/claimed` | 插件的根作用域 | 用户新消息被取出时执行状态机，决定本轮阶段，并联动计划模式 |
 | `ctx.systemPrompt.section({name:'stage-router:stage', order, text:c=>…})` | 插件的根作用域 | 按 agent 注入当前阶段的提示词。`order` 必填，取 `ctx.systemPrompt.getSectionOrder('PLAN_POLICY') + 1`，紧跟计划模式的段落。做法与 `plan/plan-mode/src/index.ts:217` 相同 |
 | `agent/pre-step`（`prepend`） | **在 `agent/created` 事件里，为每个 agent 单独注册**，在 `agent/disposed` 时注销 | dsh 自带的模型切换提示钩子也是按 agent、以 `prepend` 注册的（`core/agent/src/model-selection.ts:113-126`）。本插件的钩子注册得更晚、同样 `prepend`，就排在它外层，`await next()` 之后能看到它追加的提示。作用：过滤掉 `source.kind==='model-selection'` 的提示（仅当当前选择的是本插件的虚拟模型时）；处理 `todos_done` 和计划批准的转换；阶段或模型真的变化时，追加一条本插件的提示 |
-| `agent/request`（`prepend`） | 插件的根作用域；**如果第 0 期验证抢不过，改为在 `agent/created` 里按 agent 注册** | 先 `await next()` 拿到原配置。dsh 的 model-selection 在它自己的 `agent/request` 钩子里、`next()` 之后把 provider/model 覆盖成所选模型（`model-selection.ts:96-112`），所以本插件的钩子必须在它外层。如果 provider 是 `stage-router`（或属于要路由的子 agent），就改写成当前阶段和档位对应的真实 `{provider, model, reasoningEffort}`。同一次请求失败重试时，沿用第一次的结果 |
+| `agent/request`（`prepend`） | 插件的根作用域（第 0 期已验证能胜过 model-selection） | 先 `await next()` 拿到原配置。dsh 的 model-selection 在它自己的 `agent/request` 钩子里、`next()` 之后把 provider/model 覆盖成所选模型（`model-selection.ts:96-112`），所以本插件的钩子必须在它外层。如果 provider 是 `stage-router`（或属于要路由的子 agent），就改写成当前阶段和档位对应的真实 `{provider, model, reasoningEffort}`。同一次请求失败重试时，沿用第一次的结果 |
 
 **这样做带来的好处**
 - dsh 记录的请求头就是真实模型，所以：
   - 历史消息的回放和思考签名由 dsh 原生处理，不用像 skill-vault 那样修补历史（`withRealReplayModels`）。
   - 上下文压缩和标题生成会自然用上真实模型。
 - 模型选择器仍显示虚拟方案：dsh 的 `modelSelection` 投影里，`pending` 字段会一直保留虚拟路由。
-- 判断当前会话是否选用了本插件的方案，读 `sessionProjections.stateOf(session,'modelSelection').pending`，不读请求头。
+- 判断当前会话是否选用了本插件的方案，不读请求头（请求头已是真实模型）。`sessionProjections.stateOf(session,'modelSelection')` 只在 session-controller 里有，无界面模式下是 `undefined`，所以：在 `agent/request` 里看 `await next()` 之后的 `provider==='stage-router'`；在用户消息被取出时用 agent 服务的 `selectionFor(agent).current`（`api/session-controller/src/commands.ts:338` 的用法）。
 
 **判断器调用**
 - 直接用 `ctx.llm.stream({provider, model, system, messages, maxTokens, temperature, signal})`，用 `BlockAssembler` 收集返回的文字。
@@ -271,14 +271,19 @@ test/
 | 原设计 | 0.1.7 实际 | 修订 | 状态 |
 |---|---|---|---|
 | 按 `source.plugin==='model-selection'` 过滤模型切换提示 | 来源是 `{kind:'model-selection', form:'notice', summary}`（`core/agent/src/model-selection.ts:53,113-126`） | 按 `source.kind` 过滤 | 已改 |
-| 插件提示消息来源 `{kind:'plugin',plugin,form:'notice'}` | 0.1.7 没有这种来源；插件通过模块扩充 `MessageSourceMap` 声明自己的 `kind` | 声明 `'stage-router'` 来源（参考 `goal/goal/src/domain.ts:54`） | 待第 0 期验证重新加载 |
+| 插件提示消息来源 `{kind:'plugin',plugin,form:'notice'}` | 0.1.7 没有这种来源；插件通过模块扩充 `MessageSourceMap` 声明自己的 `kind` | 声明 `'stage-router'` 来源（参考 `goal/goal/src/domain.ts:54`） | 第 0 期第 3 项已验证：重新加载后投影能恢复 |
 | `systemPrompt.section({name,text})` | `order` 必填（`core/system-prompt/src/index.ts:454`） | 用 `getSectionOrder('PLAN_POLICY') + 1` | 已改 |
 | `settings.installSection` + `validate` | 0.1.5-rc.3 才有，0.1.7 已删；配置用 schemastery `Config` 声明，变化时触发 `loader/volatile-update` | schema 做基础校验，语义校验在加载时做 | 已改 |
 | `settingsScope.bind`、`injectSlot`、`settings.section` | 不存在 / 由设置页插件区块所有 | `ctx.slots.inject` + `settings.plugins.tab` | 第 4 期前复核 |
 | 可导入的 `useProjection` | 作为 props 传给插槽组件 | 从 props 读 | 已改 |
-| `plan_approved` 事件 | 没有；批准后追加 `plan/mode {active:false}` | 在 pre-step 里识别 | 待第 0 期验证 |
-| `agentPresets.serviceFor(agent,'planMode')` | 未见按预设挂载 | 用根服务 `ctx.planMode.set` | 已改，待第 0 期验证当步生效 |
-| 根作用域 `prepend` 的 `agent/request` 胜过模型选择 | model-selection 的 `agent/request` 按 agent 注册、非 prepend；根作用域与 agent 作用域钩子的先后未确认 | 第 0 期第 1 项验证；失败则按 agent 注册 | 待第 0 期验证 |
+| `plan_approved` 事件 | 没有；批准后追加 `plan/mode {active:false}` | 在 pre-step 里识别 | 第 0 期第 4 项已验证 |
+| `agentPresets.serviceFor(agent,'planMode')` | 未见按预设挂载 | 用根服务 `ctx.planMode.set` | 第 0 期第 4 项已验证：返回 `'queued'`，但当步生效 |
+| 根作用域 `prepend` 的 `agent/request` 胜过模型选择 | model-selection 的 `agent/request` 按 agent 注册、非 prepend；根作用域与 agent 作用域钩子的先后未确认 | 根作用域 `prepend` | 第 0 期第 1 项已验证 |
 | 自定义会话事件 | `Session.append` 不能设 `ignorable`；未知事件类型重新加载时被拒（`storage-contract.ts:75`） | 只用消息作载体，或退回 JSON 文件 | 已改 |
 
 核对无误、照原设计执行的：`registerAdapter` 及句柄 `replace`（`llm/llm/src/index.ts:297,396`）、`ctx.llm.stream` / `resolveCallConfig` / `BlockAssembler`（`llm/llm/src/assembler.ts:38`）、`ctx.commands.register`、`dsh.bundle.patch` / `dsh.client` 字段、`dsh web --patch`、会话头 `parentSession`（`core/session/src/types.ts:107`）、待办投影在 `turn/start` 时清空（`todo/tool-todo/src/index.ts:128-130`）、图片检查逻辑。
+
+第 0 期额外发现（详见第 0 期文档）：
+- 0.1.7 的系统提示词在 `messages` 里以 `role:'system'` 出现，`GenerateOptions.system` 为空。
+- 请求头是真实模型，model-selection 从第 2 轮起**每一步**都会生成模型切换提示，所以 pre-step 过滤是必需的。
+- `/stage` 命令的 `rawInput` 带前导空格，要 `trim()`。

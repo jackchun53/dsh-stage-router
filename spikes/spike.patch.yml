@@ -1,0 +1,17 @@
+# Phase 0 overlay: keyless run on the fake provider, virtual stage-router model selected.
+- id: agent-default-model
+  config:
+    provider: stage-router
+    model: spike
+
+- id: llm-deepseek
+  disabled: true
+- id: llm-deepseek-account
+  disabled: true
+- id: session-title-llm
+  disabled: true
+
+- insert:
+    - id: stage-router-spike
+      name: ./spike-plugin.js
+      config: {}
