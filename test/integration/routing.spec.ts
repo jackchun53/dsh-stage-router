@@ -18,6 +18,8 @@ describe('stage routing in a headless session', () => {
       'JUDGE=plan EXITPLAN plan it',     // 4: plan (+ plan mode), approval → code
       'JUDGE=slow hello',                // 5: judge timeout → stay
       'JUDGE=broken use the broken one', // 6: stage model missing → initial stage model
+      'JUDGE=code TIERS1 start',         // 7: tagged light todo in progress → light tier
+      'JUDGE=code TIERS2 continue',      // 8: untagged "big" todo judged heavy → heavy wins
     ]) {
       turns.push(session.send(prompt))
     }
@@ -83,5 +85,15 @@ describe('stage routing in a headless session', () => {
     for (const turn of turns) {
       for (const call of mains(turn)) expect(call.userSourceKinds).not.toContain('model-selection')
     }
+  })
+
+  it('routes by the planner-tagged tier of the in-progress todo', () => {
+    expect(routes(turns[7]!)).toEqual(['fake/m-code@high', 'fake/m-light@off'])
+    expect(mains(turns[7]!)[1]!.notices.at(-1)).toContain('tier light')
+  })
+
+  it('judges untagged todos and lets the heaviest in-progress tier win', () => {
+    expect(routes(turns[8]!)).toEqual(['fake/m-code@high', 'fake/m-heavy@max'])
+    expect(judges(turns[8]!).length).toBeGreaterThanOrEqual(2)
   })
 })

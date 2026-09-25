@@ -33,7 +33,7 @@ describe('foldStageState', () => {
       asEvent(notice('plan', { from: 'review', lock: 'plan', reason: 'locked' })),
     ])
     expect(state).toEqual({
-      scheme: 'dev', stage: 'plan', lock: 'plan', route, reason: 'locked', judge: null, detached: false, notices: 3,
+      scheme: 'dev', stage: 'plan', tier: null, lock: 'plan', route, reason: 'locked', judge: null, detached: false, notices: 3,
     })
   })
 
@@ -81,5 +81,14 @@ describe('explicit model picks', () => {
 
   it('records a scheme pick before any notice', () => {
     expect(persistedScheme(foldStageState(INITIAL_STATE, pick('stage-router', 'dev')))).toBe('dev')
+  })
+})
+
+describe('tier facts', () => {
+  it('folds the tier and names it in the notice', () => {
+    const message = notice('code', { tier: 'heavy', from: 'code' })
+    expect((message.source as { summary: string }).summary).toBe('code · heavy · fake/real-code')
+    expect(fold([asEvent(message)]).tier).toBe('heavy')
+    expect(fold([asEvent(message), asEvent(notice('review'))]).tier).toBeNull()
   })
 })

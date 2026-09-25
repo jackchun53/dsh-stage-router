@@ -9,7 +9,7 @@ const scheme = parseConfig({ schemes: [EXAMPLE_SCHEME] }).schemes[0]!
 const flash = { provider: 'deepseek-official', model: 'deepseek-flash' }
 const pro = (effort: string) => ({ provider: 'deepseek-official', model: 'deepseek-v4-pro', reasoningEffort: effort })
 
-function deps(options: { verdict?: TimedJudgement; unusable?: string[]; fallback?: RouteConfig } = {}) {
+function deps(options: { verdict?: TimedJudgement; unusable?: string[]; fallback?: RouteConfig; tiers?: RouterDeps['tiers'] } = {}) {
   const logs: string[] = []
   const judged: string[] = []
   const d: RouterDeps = {
@@ -21,6 +21,8 @@ function deps(options: { verdict?: TimedJudgement; unusable?: string[]; fallback
     usable: async route => !(options.unusable ?? []).includes(route.model),
     defaultRoute: () => options.fallback,
     log: (level, message) => { logs.push(`${level}:${message}`) },
+    tiers: options.tiers ?? { classify: () => {}, lookup: () => undefined },
+    tierWaitMs: 20,
   }
   return { d, logs, judged }
 }
@@ -127,5 +129,53 @@ describe('SessionRouter', () => {
     const fallback = { provider: 'other', model: 'x' }
     const b = new SessionRouter(scheme, plan, deps({ unusable: ['deepseek-v4-pro', 'deepseek-flash'], fallback }).d)
     expect(await b.resolveRoute()).toEqual(fallback)
+  })
+})
+
+describe('SessionRouter tiers', () => {
+  const tiered = parseConfig({
+    schemes: [{
+      ...EXAMPLE_SCHEME,
+      stages: EXAMPLE_SCHEME.stages.map(s => s.id !== 'code' ? s : {
+        ...s,
+        tiers: {
+          source: 'planner-then-judge',
+          default: 'heavy',
+          levels: [
+            { id: 'light', description: 'local change', route: { provider: 'p', model: 'light' } },
+            { id: 'heavy', description: 'cross-module', route: { provider: 'p', model: 'heavy', reasoningEffort: 'max' } },
+          ],
+        },
+      }),
+    }],
+  }).schemes[0]!
+  const atCode = { ...INITIAL_STATE, scheme: tiered.id, stage: 'code', route: flash, notices: 1 }
+
+  it('routes to the heaviest in-progress tier and announces it', async () => {
+    const classified: string[] = []
+    const tiers: RouterDeps['tiers'] = {
+      classify: (_stage, texts) => { classified.push(...texts) },
+      lookup: (_stage, text) => text.includes('big') ? Promise.resolve('heavy') : undefined,
+    }
+    const router = new SessionRouter(tiered, atCode, deps({ tiers }).d)
+    const todos = [{ content: '[T1][light] tweak', status: 'in_progress' }, { content: 'big rewrite', status: 'pending' }]
+    router.classifyTodos(todos)
+    expect(classified).toEqual(['[T1][light] tweak', 'big rewrite'])
+    expect(await router.resolveRoute(todos)).toEqual({ provider: 'p', model: 'light' })
+    expect(router.takeNotice()!.source).toMatchObject({ stage: 'code', tier: 'light' })
+    todos[1]!.status = 'in_progress'
+    expect(await router.resolveRoute(todos)).toEqual({ provider: 'p', model: 'heavy', reasoningEffort: 'max' })
+    expect(router.takeNotice()!.source).toMatchObject({ tier: 'heavy' })
+  })
+
+  it('uses the stage route when nothing is in progress', async () => {
+    const router = new SessionRouter(tiered, atCode, deps().d)
+    expect(await router.resolveRoute([{ content: 'x', status: 'completed' }])).toEqual(flash)
+    expect(router.tier).toBeUndefined()
+  })
+
+  it('falls back from an unusable tier model to the stage model', async () => {
+    const router = new SessionRouter(tiered, atCode, deps({ unusable: ['heavy'] }).d)
+    expect(await router.resolveRoute([{ content: 'unjudged', status: 'in_progress' }])).toEqual(flash)
   })
 })

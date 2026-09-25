@@ -12,6 +12,7 @@ import { ConfigSchema, effectiveJudge, type RouteConfig, type SchemeConfig, type
 import { checkRoutes, schemeRoutes, validateConfig } from './config/validate.js'
 import { JudgeCache, runJudge, summarizeRecent } from './engine/judge.js'
 import { SessionRouter, type StageEffect } from './engine/session-router.js'
+import { TierClassifier, type TodoLike } from './engine/tiers.js'
 import { INITIAL_STATE, PROJECTION_KEY, persistedScheme, stageProjection, type StageRouterState } from './engine/state.js'
 
 export { PROVIDER } from './adapter.js'
@@ -70,6 +71,7 @@ export function apply(ctx: Context, config: Config): void {
 
   // ---- shared services for every session router ----
   const judgeCache = new JudgeCache()
+  const tierClassifier = new TierClassifier(options => ctx.llm.stream(options), (message, ...args) => log('debug', message, ...args))
   const routeChecks = new Map<string, { ok: boolean; at: number }>()
   const usable = async (route: RouteConfig): Promise<boolean> => {
     const key = `${route.provider}/${route.model}@${route.reasoningEffort ?? ''}`
@@ -153,6 +155,7 @@ export function apply(ctx: Context, config: Config): void {
         return fallback === undefined || fallback.provider === PROVIDER ? undefined : fallback
       },
       log,
+      tiers: tierClassifier,
     })
     routers.set(agent.session, router)
     return router
@@ -229,7 +232,8 @@ export function apply(ctx: Context, config: Config): void {
         if (trigger !== undefined) applyEffect(agent, router.onTrigger(trigger))
       }
       observePlan()
-      if (router.observeTodos(projection(agent.session, 'todos'))) applyEffect(agent, router.onTrigger('todos_done'))
+      const todos = projection<TodoLike[] | null>(agent.session, 'todos')
+      if (router.observeTodos(todos)) applyEffect(agent, router.onTrigger('todos_done'))
       const message = claimed.get(agent)
       if (message !== undefined) {
         claimed.delete(agent)
@@ -242,7 +246,8 @@ export function apply(ctx: Context, config: Config): void {
       }
       // Swallow the plan-mode switch this router just asked for.
       observePlan()
-      await router.resolveRoute()
+      router.classifyTodos(todos)
+      await router.resolveRoute(todos)
       const resolvedPrompt = assembly.sections.find(section => section.name === STAGE_SECTION)?.text ?? ''
       const stale = resolvedPrompt !== stagePrompt(agent) || effectivePlanMode(agent) !== planBefore
       if (!stale || systemPrompt === undefined) return next()

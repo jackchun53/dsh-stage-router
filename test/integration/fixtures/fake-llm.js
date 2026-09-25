@@ -8,6 +8,10 @@
 //   JUDGE=slow                    judge never answers (hits the timeout)
 //   TODO                          assistant calls todo_write with one completed item
 //   EXITPLAN                      assistant calls exit_plan_mode
+//   TIERS1                        todo_write: "[T1][light] small fix" in progress, "big refactor" pending
+//   TIERS2                        todo_write: both of the above in progress
+// Tier-judge requests (prompt lists "Tiers, lightest first") answer heavy for
+// tasks containing "big", light otherwise.
 import { appendFileSync } from 'node:fs'
 import { LlmAdapter, ToolCallId } from '@deepseek-ai/dsh-llm'
 
@@ -34,7 +38,7 @@ function* toolCall(name, args) {
 
 class FakeAdapter extends LlmAdapter {
   async listModels(provider) {
-    return ['m-plan', 'm-code', 'm-review', 'm-judge'].map(id => ({ provider, id, name: id }))
+    return ['m-plan', 'm-code', 'm-review', 'm-judge', 'm-light', 'm-heavy'].map(id => ({ provider, id, name: id }))
   }
 
   async resolveModel(provider, model) {
@@ -63,6 +67,10 @@ class FakeAdapter extends LlmAdapter {
     if (LOG) appendFileSync(LOG, JSON.stringify(entry) + '\n')
     if (judge) {
       const prompt = textOf(messages.at(-1))
+      if (prompt.includes('Tiers, lightest first')) {
+        const tasks = [...prompt.matchAll(/^\d+\. (.*)$/gm)].map(match => match[1])
+        return yield * text(JSON.stringify({ tiers: tasks.map(task => task.includes('big') ? 'heavy' : 'light') }))
+      }
       const marker = /JUDGE=(\w+)(?:@([\d.]+))?/.exec(prompt.split('New user message:').at(-1) ?? '')
       if (marker?.[1] === 'slow') {
         await new Promise((_, reject) => options.signal?.addEventListener('abort', () => reject(new Error('aborted'))))
@@ -77,6 +85,8 @@ class FakeAdapter extends LlmAdapter {
     const continuation = messages.slice(messages.lastIndexOf(lastUser) + 1).some(m => m.role === 'tool')
     if (!continuation) {
       if (prompt.includes('TODO')) return yield * toolCall('todo_write', { todos: [{ content: 'finish it', status: 'completed' }] })
+      if (prompt.includes('TIERS1')) return yield * toolCall('todo_write', { todos: [{ content: '[T1][light] small fix', status: 'in_progress' }, { content: 'big refactor', status: 'pending' }] })
+      if (prompt.includes('TIERS2')) return yield * toolCall('todo_write', { todos: [{ content: '[T1][light] small fix', status: 'in_progress' }, { content: 'big refactor', status: 'in_progress' }] })
       if (prompt.includes('EXITPLAN')) return yield * toolCall('exit_plan_mode', { plan: '# Plan\n\n1. do it' })
     }
     yield * text(`reply from ${options.provider}/${options.model}`)

@@ -22,6 +22,8 @@ export interface StageRouterMessageSource {
   readonly kind: 'stage-router'
   readonly scheme: string
   readonly stage: string
+  /** Tier inside the stage, when the stage has tiers and work is in progress. */
+  readonly tier?: string
   readonly from: string | null
   readonly route: RouteConfig
   readonly reason: string
@@ -39,6 +41,7 @@ declare module '@deepseek-ai/dsh-llm' {
 export interface StageRouterState {
   scheme: string | null
   stage: string | null
+  tier: string | null
   lock: string | null
   route: RouteConfig | null
   reason: string | null
@@ -64,7 +67,7 @@ declare module '@deepseek-ai/dsh-session-projection' {
 export const PROJECTION_KEY = 'stage-router'
 
 export const INITIAL_STATE: StageRouterState = {
-  scheme: null, stage: null, lock: null, route: null, reason: null, judge: null, detached: false, notices: 0,
+  scheme: null, stage: null, tier: null, lock: null, route: null, reason: null, judge: null, detached: false, notices: 0,
 }
 
 const routeSchema = z.object({
@@ -85,6 +88,7 @@ const judgeSchema = z.object({
 export const stateSchema = z.object({
   scheme: z.string().nullable(),
   stage: z.string().nullable(),
+  tier: z.string().nullable(),
   lock: z.string().nullable(),
   route: routeSchema.nullable(),
   reason: z.string().nullable(),
@@ -120,6 +124,7 @@ export function foldStageState(state: StageRouterState, event: { type: string; d
   return {
     scheme: source.scheme,
     stage: source.stage,
+    tier: source.tier ?? null,
     lock: source.lock,
     route: source.route,
     reason: source.reason,
@@ -156,10 +161,12 @@ function routeLabel(route: RouteConfig): string {
  */
 export function stageNotice(input: Omit<StageRouterMessageSource, 'kind'> & { stageName: string }): UserMessage {
   const { stageName, ...facts } = input
+  const where = facts.tier === undefined ? stageName : `${stageName} · ${facts.tier}`
   const summary = facts.from === facts.stage
-    ? `${stageName} · ${routeLabel(facts.route)}`
-    : `${facts.from ?? '—'} → ${stageName} · ${routeLabel(facts.route)}`
-  const text = `[stage-router: stage "${facts.stage}" (${stageName}), model ${routeLabel(facts.route)}${facts.lock === null ? '' : ', locked'}. `
+    ? `${where} · ${routeLabel(facts.route)}`
+    : `${facts.from ?? '—'} → ${where} · ${routeLabel(facts.route)}`
+  const tierText = facts.tier === undefined ? '' : `, tier ${facts.tier}`
+  const text = `[stage-router: stage "${facts.stage}" (${stageName})${tierText}, model ${routeLabel(facts.route)}${facts.lock === null ? '' : ', locked'}. `
     + 'Assistant turns above may come from other models.]'
   return createUserMessage({
     content: [{ type: 'text', text }],

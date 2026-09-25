@@ -39,6 +39,12 @@
                 description: write code
                 route: { provider: fake, model: m-code }
                 planMode: exit
+                tiers:
+                  source: planner-then-judge
+                  default: heavy
+                  levels:
+                    - { id: light, description: local change, route: { provider: fake, model: m-light, reasoningEffort: 'off' } }
+                    - { id: heavy, description: cross-module work, route: { provider: fake, model: m-heavy, reasoningEffort: max } }
               - id: review
                 name: Review
                 description: review changes

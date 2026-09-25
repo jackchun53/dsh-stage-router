@@ -1,6 +1,7 @@
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import type { JudgeConfig, RouteConfig, SchemeConfig, StageConfig, TransitionEvent } from '../config/schema.js'
 import type { JudgeInput, TimedJudgement } from './judge.js'
+import { pickTier, type TierClassifier, type TodoLike } from './tiers.js'
 import { stageNotice, type JudgeRecord, type StageRouterState } from './state.js'
 import { applyJudgement, decide, type Decision, type MachineState } from './transitions.js'
 
@@ -13,6 +14,10 @@ export interface RouterDeps {
   usable(route: RouteConfig): Promise<boolean>
   /** Picker default outside stage-router, used as the last fallback. */
   defaultRoute(): RouteConfig | undefined
+  /** Shared tier classifier (judge-backed, cached by todo text). */
+  tiers: Pick<TierClassifier, 'classify' | 'lookup'>
+  /** Longest wait for pending tier judgements (default 1.5 s). */
+  tierWaitMs?: number
   log(level: 'debug' | 'info' | 'warn' | 'error', message: string, ...args: unknown[]): void
 }
 
@@ -40,11 +45,12 @@ const routeKey = (route: RouteConfig | undefined) => route === undefined
  */
 export class SessionRouter {
   stage: string | null
+  tier: string | undefined
   lock: string | null
   route: RouteConfig | undefined
   private reason = 'resume'
   private judgement: JudgeRecord | undefined
-  private announced: { stage: string | null; lock: string | null; route: string }
+  private announced: { stage: string | null; tier: string | undefined; lock: string | null; route: string }
   /** Plan-mode state seen at the end of the last pre-step; `undefined` until observed. */
   private planActive: boolean | undefined
   /** Plan-mode value this router asked for, so its own switch is not read back as a trigger. */
@@ -63,7 +69,8 @@ export class SessionRouter {
     this.stage = sameScheme && known(persisted.stage) ? persisted.stage : null
     this.lock = sameScheme && known(persisted.lock) ? persisted.lock : null
     this.route = sameScheme && persisted.route !== null ? persisted.route : undefined
-    this.announced = { stage: this.stage, lock: this.lock, route: routeKey(this.route) }
+    this.tier = sameScheme && persisted.tier !== null ? persisted.tier : undefined
+    this.announced = { stage: this.stage, tier: this.tier, lock: this.lock, route: routeKey(this.route) }
   }
 
   get stageConfig(): StageConfig | undefined {
@@ -173,14 +180,27 @@ export class SessionRouter {
     return { planMode }
   }
 
+  /** Start tier judgements for the current stage's todos (cached; returns at once). */
+  classifyTodos(todos: readonly TodoLike[] | null | undefined): void {
+    const stage = this.stageConfig
+    if (stage === undefined || todos == null || todos.length === 0) return
+    this.deps.tiers.classify(stage, todos.map(todo => todo.content), this.deps.judgeConfig(this.scheme))
+  }
+
   /**
    * Resolve the model for the current stage with the design's fallback chain:
-   * stage route → initial stage route → picker default. Phase 1 has no tiers.
+   * tier route → stage route → initial stage route → picker default.
+   * @param todos - the session's todos; the heaviest in-progress one picks the tier.
    */
-  async resolveRoute(): Promise<RouteConfig | undefined> {
+  async resolveRoute(todos?: readonly TodoLike[] | null): Promise<RouteConfig | undefined> {
     if (this.stage === null) this.stage = this.scheme.initialStage
-    const initial = this.scheme.stages.find(stage => stage.id === this.scheme.initialStage)?.route
-    const chain = [this.stageConfig?.route, initial, this.deps.defaultRoute()]
+    const stage = this.stageConfig
+    const pick = stage === undefined ? undefined : await pickTier(stage, todos, this.deps.tiers, this.deps.tierWaitMs)
+    this.tier = pick?.tier
+    const tierRoute = pick === undefined ? undefined : stage?.tiers?.levels.find(level => level.id === pick.tier)?.route
+    if (pick !== undefined) this.deps.log('debug', 'stage-router: stage %s tier %s (%s)', this.stage, pick.tier, pick.reason)
+    const initial = this.scheme.stages.find(s => s.id === this.scheme.initialStage)?.route
+    const chain = [tierRoute, stage?.route, initial, this.deps.defaultRoute()]
       .filter((route): route is RouteConfig => route !== undefined)
     for (const [index, route] of chain.entries()) {
       if (await this.deps.usable(route)) {
@@ -197,14 +217,16 @@ export class SessionRouter {
   /** A notice when stage, lock or model changed since the last one; `undefined` otherwise. */
   takeNotice(): UserMessage | undefined {
     if (this.stage === null || this.route === undefined) return undefined
-    const current = { stage: this.stage, lock: this.lock, route: routeKey(this.route) }
+    const current = { stage: this.stage, tier: this.tier, lock: this.lock, route: routeKey(this.route) }
     const previous = this.announced
-    if (previous.stage === current.stage && previous.lock === current.lock && previous.route === current.route) return undefined
+    if (previous.stage === current.stage && previous.tier === current.tier
+      && previous.lock === current.lock && previous.route === current.route) return undefined
     this.announced = current
     return stageNotice({
       stageName: this.stageConfig?.name || this.stage,
       scheme: this.scheme.id,
       stage: this.stage,
+      ...this.tier === undefined ? {} : { tier: this.tier },
       from: previous.stage,
       route: this.route,
       reason: this.reason,
