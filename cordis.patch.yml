@@ -1,0 +1,5 @@
+# Bundle layer for dsh-stage-router: adds the plugin row with an example scheme.
+- insert:
+    - id: stage-router
+      name: dsh-stage-router
+      config: {}

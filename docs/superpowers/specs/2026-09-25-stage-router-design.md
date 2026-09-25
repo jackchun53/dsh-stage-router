@@ -71,7 +71,12 @@ skill-vault 客户端的「预设模型」（`skill-vault/packages/dsh-plugin`�
 
 ## 2. 配置结构（插件配置 `stage-router`）
 
-> 0.1.7 里插件配置用 `@deepseek-ai/schemastery` 声明 `export const Config`（参考 `todo/tool-todo/src/index.ts:41`），存放在 profile 里本插件那一行的 `config` 下，设置界面按 schema 自动生成表单。下面的 YAML 就是这一行 `config` 的内容。
+> 0.1.7 里插件配置用 `@deepseek-ai/schemastery` 声明 `export const Config`（参考 `todo/tool-todo/src/index.ts:41`），设置界面按 schema 自动生成表单。下面的 YAML 就是本插件那一行 `config` 的内容。
+>
+> 实际存放位置（第 1 期任务 1 已确认）：
+> - `dsh plugin --profile <p> add <包>` 会把本包加进 `$DSH_HOME/profiles/<p>/package.json` 的 `dsh.profile.bundles`，本包的 `cordis.patch.yml` 作为 bundle 层插入 `- id: stage-router` 这一行，里面写默认配置；
+> - 用户的覆盖写在 `$DSH_HOME/profiles/<p>/cordis.patch.yml`，形如 `- id: stage-router` 加 `config: {...}`，会**整体替换**这一行的 `config`；
+> - `dsh --profile <p> --dump-config` 可以看到合成后的结果。
 
 ```yaml
 stage-router:
