@@ -2,3 +2,4 @@ node_modules/
 lib/
 .dsh-home/
 *.log
+web-ui.png

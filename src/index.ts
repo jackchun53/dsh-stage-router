@@ -143,6 +143,24 @@ export function apply(ctx: Context, config: Config): void {
     return id === null ? undefined : schemes.get(id)
   }
 
+  /**
+   * Web sessions that run on the picker default have no explicit pick, and the
+   * session controller then shows (and selects) the last logged model, which
+   * is the real routed one. Record the scheme as the session's explicit pick,
+   * the same durable `model/selection` event the picker writes, so the picker
+   * keeps showing `stage-router/<scheme>`. Only where that projection exists.
+   */
+  const pinSelection = (agent: Agent, scheme: SchemeConfig) => {
+    const selection = projection<{ pending: Selection | null }>(agent.session, 'modelSelection')
+    if (selection === undefined || selection.pending !== null) return
+    try {
+      const append = agent.session.append.bind(agent.session) as (type: string, data: Selection) => unknown
+      append('model/selection', { provider: PROVIDER, model: scheme.id })
+    } catch (error) {
+      log('warn', 'stage-router: could not record the scheme as the session model: %o', error)
+    }
+  }
+
   const routerFor = (agent: Agent, scheme: SchemeConfig): SessionRouter => {
     const existing = routers.get(agent.session)
     if (existing !== undefined && existing.scheme === scheme) return existing
@@ -325,6 +343,7 @@ export function apply(ctx: Context, config: Config): void {
       }
       const router = routerFor(agent, scheme)
       active.set(agent, router)
+      pinSelection(agent, scheme)
       const planBefore = effectivePlanMode(agent)
       const observePlan = () => {
         const planActive = effectivePlanMode(agent)

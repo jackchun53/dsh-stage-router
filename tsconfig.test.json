@@ -4,5 +4,12 @@
     "rootDir": ".",
     "noEmit": true
   },
-  "include": ["src", "test"]
+  "include": [
+    "src",
+    "test"
+  ],
+  "exclude": [
+    "src/client",
+    "test/client"
+  ]
 }
