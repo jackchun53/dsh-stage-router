@@ -1,0 +1,9 @@
+{
+  "name": "dsh-stage-router-spikes",
+  "private": true,
+  "type": "module",
+  "description": "Phase 0 technical spikes for dsh-stage-router (dsh 0.1.7-rc.2)",
+  "devDependencies": {
+    "@deepseek-ai/dsh": "0.1.7-rc.2"
+  }
+}

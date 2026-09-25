@@ -1,6 +1,7 @@
 # dsh-stage-router 设计文档
 
-> 状态：设计已确认（2026-09-25），待审阅后拆分实施计划。
+> 状态：设计已确认（2026-09-25）；已按 dsh 0.1.7 修订（见 §9），第 0 期验证中。
+> 目标版本：`@deepseek-ai/dsh@0.1.7-rc.2`（源码 deepseek-harness `477b4f4`）。实施计划见 `docs/superpowers/plans/`。
 
 ## Context
 
@@ -29,24 +30,25 @@ skill-vault 客户端的「预设模型」（`skill-vault/packages/dsh-plugin`�
 **打包方式**
 - TypeScript，参照 `D:\workspace\nodejs\dsh-oss-sync` 的项目骨架：`tsc` 编译后端代码，`scripts/build-client.mjs` 打包 Web 端。
 - 用 `package.json` 的 `dsh.bundle.patch` 字段指向 `cordis.patch.yml`，用 `dsh.client` 字段声明 Web 端入口。
-- `@deepseek-ai/*` 全部写成 `peerDependencies: "*"`。
+- `@deepseek-ai/*` 全部写成 `peerDependencies: "*"`；开发依赖锁精确版本 `0.1.7-rc.2`（子包的 npm `latest` 标签还停在 0.0.1-rc.1，不能用）。
 - `cordis.patch.yml` 里的插件行，名称用不带子路径的包名，否则 Web 端不会被加载。
+- patch 里的一行会**整体替换**该行的 `config`，覆盖时要把本插件负责的键写全（`boot/app-boot/src/profile.ts:59`）。
 
 **虚拟服务商 `stage-router`**（`src/adapter.ts`）
-- 通过 `ctx.llm.registerAdapter(['stage-router'], adapter)` 注册。
+- 通过 `ctx.llm.registerAdapter(['stage-router'], adapter)` 注册（`llm/llm/src/index.ts:396`）。`LlmAdapter` 是抽象类，只有 `stream()` 必须实现，`listModels` / `resolveModel` 有默认实现（`:208-290`）。写法参考 `llm/llm-deepseek/src/host.ts:39`。
 - `listModels()` 把每套方案列成一个模型。
-- `resolveModel()`：方案里任一阶段模型支持图片，就声明这个虚拟模型也支持图片。原因是 dsh 在接收用户消息时，是按虚拟模型来检查能否输入图片的（`session-controller/src/commands.ts:335`）。
+- `resolveModel()`：方案里任一阶段模型支持图片，就在 `inputModalities` 里带上 `'image'`（或干脆不填 `inputModalities`）。原因是 dsh 在接收用户消息时，是按虚拟模型来检查能否输入图片的，只有 `inputModalities` 有值且不含 `'image'` 时才拒绝（`api/session-controller/src/commands.ts:336-345`）。
 - `stream()` 正常情况下不会被调用。万一被调用，就把请求转给方案初始阶段的真实模型（`ctx.llm.stream`），保证会话不会卡死。
-- 方案有增删时，用 `handle.replace(ids)` 更新注册的模型列表。
+- 方案有增删时（插件收到 `loader/volatile-update`），用 `handle.replace(['stage-router'])` 重新注册；`listModels()` 每次按当前配置返回方案列表。
 
 **四个核心钩子**
 
 | 钩子 | 在哪里注册 | 作用 |
 |---|---|---|
 | `agent/inbox/claimed` | 插件的根作用域 | 用户新消息被取出时执行状态机，决定本轮阶段，并联动计划模式 |
-| `ctx.systemPrompt.section({name:'stage-router:stage', text:c=>…})` | 插件的根作用域 | 按 agent 注入当前阶段的提示词。做法与 `plan-mode/src/index.ts:212` 相同 |
-| `agent/pre-step`（`prepend`） | **在 `agent/created` 事件里，为每个 agent 单独注册**，在 `agent/disposed` 时注销 | 必须这样注册，才能排在 dsh 自带的模型切换提示钩子之前（`model-selection.ts:108`）。作用：过滤掉 `source.plugin==='model-selection'` 的提示（仅当当前选择的是本插件的虚拟模型时）；处理 `todos_done` 转换；阶段或模型真的变化时，追加一条本插件的提示 |
-| `agent/request`（`prepend`） | 插件的根作用域 | 先 `await next()` 拿到原配置。如果 provider 是 `stage-router`（或属于要路由的子 agent），就改写成当前阶段和档位对应的真实 `{provider, model, reasoningEffort}`。同一次请求失败重试时，沿用第一次的结果 |
+| `ctx.systemPrompt.section({name:'stage-router:stage', order, text:c=>…})` | 插件的根作用域 | 按 agent 注入当前阶段的提示词。`order` 必填，取 `ctx.systemPrompt.getSectionOrder('PLAN_POLICY') + 1`，紧跟计划模式的段落。做法与 `plan/plan-mode/src/index.ts:217` 相同 |
+| `agent/pre-step`（`prepend`） | **在 `agent/created` 事件里，为每个 agent 单独注册**，在 `agent/disposed` 时注销 | dsh 自带的模型切换提示钩子也是按 agent、以 `prepend` 注册的（`core/agent/src/model-selection.ts:113-126`）。本插件的钩子注册得更晚、同样 `prepend`，就排在它外层，`await next()` 之后能看到它追加的提示。作用：过滤掉 `source.kind==='model-selection'` 的提示（仅当当前选择的是本插件的虚拟模型时）；处理 `todos_done` 和计划批准的转换；阶段或模型真的变化时，追加一条本插件的提示 |
+| `agent/request`（`prepend`） | 插件的根作用域；**如果第 0 期验证抢不过，改为在 `agent/created` 里按 agent 注册** | 先 `await next()` 拿到原配置。dsh 的 model-selection 在它自己的 `agent/request` 钩子里、`next()` 之后把 provider/model 覆盖成所选模型（`model-selection.ts:96-112`），所以本插件的钩子必须在它外层。如果 provider 是 `stage-router`（或属于要路由的子 agent），就改写成当前阶段和档位对应的真实 `{provider, model, reasoningEffort}`。同一次请求失败重试时，沿用第一次的结果 |
 
 **这样做带来的好处**
 - dsh 记录的请求头就是真实模型，所以：
@@ -62,11 +64,14 @@ skill-vault 客户端的「预设模型」（`skill-vault/packages/dsh-plugin`�
 
 **会话状态的持久化**
 - 不能往会话里写 dsh 不认识的事件类型，否则重新加载时会话会打不开（`storage-contract.ts:74`）。
-- **首选方案**：换阶段时追加的那条提示消息（`source:{kind:'plugin',plugin:'stage-router',form:'notice'}`）同时作为持久化载体。再注册一个会话投影 `stage-router`，把这些消息折叠成「当前阶段、手动锁定、最近一次判断」，并带上 wire 视图，让 Web 端能用 `useProjection` 直接读到。
+- 外部插件**不能**追加自定义的会话事件类型：`Session.append` 没有办法设置 `ignorable`，而已知事件类型的列表是 dsh 仓库内生成的（`core/session/src/known-event-types.ts`）。
+- **首选方案**：换阶段时追加的那条提示消息同时作为持久化载体。0.1.7 里没有 `{kind:'plugin'}` 来源，改为通过模块扩充在 `MessageSourceMap`（`@deepseek-ai/dsh-llm`）里声明 `'stage-router'` 来源，形如 `{kind:'stage-router', form:'notice', summary, stage, tier?, route, lock?, judge?}`（`form:'notice'` 要求带 `summary`，见 `llm/llm/src/message.ts:86`）。写法参考 goal 插件的 `goal/goal/src/domain.ts:54`。再用 `ctx.sessionProjections.register({key:'stage-router', stateSchema, init, apply, wire:{viewSchema, view}, stateVersion})` 注册会话投影，把这些消息折叠成「当前阶段、手动锁定、最近一次判断」；`wire` 要通过模块扩充 `SessionProjectionMap` 才能通过类型检查。Web 端插槽组件通过 props 拿到 `useProjection` 来读。
 - **备选方案**：用插件自己的 JSON 文件 `~/.dsh/stage-router/state.json`，按 sessionId 保存，插件卸载时写盘，会话销毁时清理。skill-vault 就是这么做的。
 - 两者选哪个，由第 0 期的实验结果决定。
 
-## 2. 配置结构（`settings.yaml` → `stage-router`）
+## 2. 配置结构（插件配置 `stage-router`）
+
+> 0.1.7 里插件配置用 `@deepseek-ai/schemastery` 声明 `export const Config`（参考 `todo/tool-todo/src/index.ts:41`），存放在 profile 里本插件那一行的 `config` 下，设置界面按 schema 自动生成表单。下面的 YAML 就是这一行 `config` 的内容。
 
 ```yaml
 stage-router:
@@ -113,18 +118,20 @@ stage-router:
 |---|---|
 | `user_message` | 用户发来新消息。这是唯一会调用判断器的事件 |
 | `plan_mode_on` / `plan_mode_off` | 用户切换 dsh 计划模式 |
-| `plan_approved` | `exit_plan_mode` 被批准 |
+| `plan_approved` | dsh 没有专门的批准事件。`exit_plan_mode` 走 `userQuestions.ask`（`intent:{kind:'plan-review'}`），批准后下一次 pre-step 会追加 `plan/mode {active:false}`。本插件把「计划模式由开变关，且本轮出现过 `exit_plan_mode` 调用」当作批准，在 pre-step 里识别 |
 | `todos_done` | 待办全部完成 |
 
 **匹配规则**
 - 同一个事件命中多条规则、目标又不同时，这些目标合起来作为判断器的候选阶段。只剩一个候选时，不调用判断器。
 - 手动锁定的优先级最高。
 
-**保存时的校验**
-- 用 `settings.installSection` 注册配置段，在它的 `validate` 钩子里做校验。
-- 每个模型都用 `ctx.llm.resolveCallConfig` 检查是否真实存在、推理强度是否支持。
-- 阶段 ID 要唯一，转换规则引用的阶段要存在，`initialStage` 和 `tiers.default` 要合法。
-- 注意：dsh 0.1.7 移除了 `settings.register`，要先检测 dsh 是否提供对应接口再调用，做法参考 skill-vault 的 `preferences-store.js:101`。
+**校验**
+- 0.1.7 已经没有 `settings.installSection` / `settings.register`，也没有保存前的 `validate` 钩子。
+- 字段类型、必填、枚举：交给 schemastery 的 `Config` schema。
+- 语义校验放在插件加载时和 `loader/volatile-update` 时，由纯函数 `validateScheme()` 完成：
+  - 阶段 ID 要唯一，转换规则引用的阶段要存在，`initialStage` 和 `tiers.default` 要合法；
+  - 每个模型都用 `ctx.llm.resolveCallConfig`（`llm/llm/src/index.ts:878`）检查是否真实存在、推理强度是否支持。
+- 校验不通过的方案：仍列在模型选择器里但标为不可用，写 error 日志；错误列表通过远程服务提供给 Web 端，由编辑器定位到具体字段。
 
 ## 3. 运行流程
 
@@ -134,7 +141,7 @@ stage-router:
    - 否则应用 `user_message` 规则，必要时调用判断器。
    - 判断失败或置信度不足 → 留在当前阶段；如果是会话第一条消息 → 进入 `initialStage`。
 2. **进入新阶段时**：
-   - 按 `planMode` 调用 `agentPresets.serviceFor(agent,'planMode').set(agent, bool)`。拿不到时退回 `ctx.get('planMode')`。
+   - 按 `planMode` 调用根服务 `ctx.planMode.set(agent, bool)`（`plan/plan-mode/src/index.ts:419`）；`ctx.get('planMode')` 取不到时忽略该设置。源码里没看到计划模式按预设挂载，不再走 `agentPresets.serviceFor`。
    - 自己发起的计划模式切换要做标记，不再按这个事件跳转阶段，避免来回循环。
 3. **组装系统提示词时**：注入当前阶段的 `prompt`。
 4. **每一步开始前**：
@@ -172,8 +179,10 @@ stage-router:
 
 ## 4. 界面（`src/client/`）
 
-**设置页编辑器**（注册到 `settings.section` 插槽）
-- **读写配置**：`settingsScope.bind({namespace:'stage-router'})`。
+> 0.1.7 的写法：注入插槽用 `ctx.slots.inject(name, () => ctx.slots.register({...}, Component))`；`settingsScope.bind` 和 `injectSlot` 在 0.1.7 里都不存在。本章的界面细节在第 4 期开工前按 0.1.7 的设置服务重新核对一遍。
+
+**设置页编辑器**（注册到 `settings.plugins.tab` 插槽；`settings.section` 归设置页的插件区块所有，功能插件应往它的标签页里加）
+- **读写配置**：通过设置服务的 `describe` / `update` 读写本插件那一行的 `config`。
 - **模型下拉**：数据来自 `remote.session.modelCatalog()`，排除 `stage-router` 自己。推理强度下拉跟所选模型联动。
 - **页面结构**：左侧是方案列表（新建、复制、删除），右侧四个标签页：
 
@@ -190,8 +199,8 @@ stage-router:
 **对话里的展示**
 - **输入框右侧小标签**（`conversation.input.right`）：只在选用了本插件方案的会话里显示，例如 `编码 · heavy · v4-pro`。点开是一个面板：最近一次判断的原因和置信度、锁定或解锁阶段、按任务手动改档。
 - **每轮末尾摘要**（`conversation.chat.turnTail`）：例如 `本轮：规划 → 编码（v4-pro → v4-flash）`。
-- **命令**：`/stage <id>` 和 `/stage auto`。先确认 dsh 支持插件注册命令；不支持就只保留界面入口。
-- 插槽注册的写法参考 skill-vault 的 `client/index.jsx:740-751`：用 `injectSlot` 包一层 try/catch，兼容旧版 dsh。
+- **命令**：`/stage <id>` 和 `/stage auto`，用 `ctx.commands.register({name, description, input, handler})` 注册（`interaction/commands/src/index.ts:285`），写法与计划模式的 `/plan` 相同。
+- 插槽组件从 props 里拿 `useProjection` 读 `stage-router` 投影（参考 `client/ui-plan/src/client/PlanModeControl.tsx:19`）。
 
 ## 5. 错误处理
 
@@ -226,9 +235,9 @@ test/
 
 - **第 0 期：技术验证**（每项写一个最小插件，用 `pnpm dsh web --patch` 加载，逐项验证。失败就回到对应设计点调整）
   1. 在根作用域以 `prepend` 注册的 `agent/request` 钩子，能胜过 dsh 自带的模型选择；dsh 记录的请求头是真实模型。
-  2. 在 `agent/created` 里以 `prepend` 注册的 `pre-step` 钩子，能过滤掉 dsh 的模型切换提示。
-  3. 会话投影能读到插件写入的提示消息的来源信息。读不到就改用 JSON 文件保存状态。
-  4. 在用户消息被取出时调用 `planMode.set`，当步就能生效。
+  2. 在 `agent/created` 里以 `prepend` 注册的 `pre-step` 钩子，能过滤掉 dsh 的模型切换提示（`source.kind==='model-selection'`）。
+  3. 会话投影能读到插件写入的提示消息（自定义 `source.kind`）的来源信息，且会话重新加载后仍能读到、不报错。不行就改用 JSON 文件保存状态。
+  4. 在用户消息被取出时调用 `ctx.planMode.set`，当步就能生效；计划批准能在 pre-step 里识别出来。
   5. 插件能否注册 `/stage` 命令。
   6. 虚拟模型声明支持图片后，dsh 接收图片消息的检查能通过。
 - **第 1 期：核心能力**：配置结构和校验、虚拟服务商、状态机、判断器、四个核心钩子、计划模式联动、状态持久化。完成后只写 YAML 配置就能用。
@@ -255,3 +264,21 @@ test/
   - 「试一试」能返回判断结果；
   - 小标签和每轮末尾摘要随对话更新。
 
+## 9. dsh 0.1.7 接口修订记录
+
+核对依据：deepseek-harness `477b4f4`（rel/dsh-0.1.7-rc.2），路径相对于 `packages/`。
+
+| 原设计 | 0.1.7 实际 | 修订 | 状态 |
+|---|---|---|---|
+| 按 `source.plugin==='model-selection'` 过滤模型切换提示 | 来源是 `{kind:'model-selection', form:'notice', summary}`（`core/agent/src/model-selection.ts:53,113-126`） | 按 `source.kind` 过滤 | 已改 |
+| 插件提示消息来源 `{kind:'plugin',plugin,form:'notice'}` | 0.1.7 没有这种来源；插件通过模块扩充 `MessageSourceMap` 声明自己的 `kind` | 声明 `'stage-router'` 来源（参考 `goal/goal/src/domain.ts:54`） | 待第 0 期验证重新加载 |
+| `systemPrompt.section({name,text})` | `order` 必填（`core/system-prompt/src/index.ts:454`） | 用 `getSectionOrder('PLAN_POLICY') + 1` | 已改 |
+| `settings.installSection` + `validate` | 0.1.5-rc.3 才有，0.1.7 已删；配置用 schemastery `Config` 声明，变化时触发 `loader/volatile-update` | schema 做基础校验，语义校验在加载时做 | 已改 |
+| `settingsScope.bind`、`injectSlot`、`settings.section` | 不存在 / 由设置页插件区块所有 | `ctx.slots.inject` + `settings.plugins.tab` | 第 4 期前复核 |
+| 可导入的 `useProjection` | 作为 props 传给插槽组件 | 从 props 读 | 已改 |
+| `plan_approved` 事件 | 没有；批准后追加 `plan/mode {active:false}` | 在 pre-step 里识别 | 待第 0 期验证 |
+| `agentPresets.serviceFor(agent,'planMode')` | 未见按预设挂载 | 用根服务 `ctx.planMode.set` | 已改，待第 0 期验证当步生效 |
+| 根作用域 `prepend` 的 `agent/request` 胜过模型选择 | model-selection 的 `agent/request` 按 agent 注册、非 prepend；根作用域与 agent 作用域钩子的先后未确认 | 第 0 期第 1 项验证；失败则按 agent 注册 | 待第 0 期验证 |
+| 自定义会话事件 | `Session.append` 不能设 `ignorable`；未知事件类型重新加载时被拒（`storage-contract.ts:75`） | 只用消息作载体，或退回 JSON 文件 | 已改 |
+
+核对无误、照原设计执行的：`registerAdapter` 及句柄 `replace`（`llm/llm/src/index.ts:297,396`）、`ctx.llm.stream` / `resolveCallConfig` / `BlockAssembler`（`llm/llm/src/assembler.ts:38`）、`ctx.commands.register`、`dsh.bundle.patch` / `dsh.client` 字段、`dsh web --patch`、会话头 `parentSession`（`core/session/src/types.ts:107`）、待办投影在 `turn/start` 时清空（`todo/tool-todo/src/index.ts:128-130`）、图片检查逻辑。
