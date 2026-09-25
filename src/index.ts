@@ -7,9 +7,10 @@ import type { Session } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-projection'
 import type { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-user-questions'
-import type z from '@deepseek-ai/schemastery'
+import z from '@deepseek-ai/schemastery'
+import type { Volatile } from '@deepseek-ai/cordis'
 import { PROVIDER, StageRouterAdapter, initialRoute } from './adapter.js'
-import { ConfigSchema, effectiveJudge, type RouteConfig, type SchemeConfig, type StageRouterConfig } from './config/schema.js'
+import { DEFAULT_JUDGE, JudgeSchema, SchemeSchema, effectiveJudge, type RouteConfig, type SchemeConfig, type StageRouterConfig } from './config/schema.js'
 import { checkRoutes, schemeRoutes, validateConfig } from './config/validate.js'
 import { JudgeCache, runJudge, summarizeRecent } from './engine/judge.js'
 import { SessionRouter, type StageEffect } from './engine/session-router.js'
@@ -26,10 +27,21 @@ export const name = 'stage-router'
 
 export const inject = ['llm', 'sessionProjections']
 
-/** Plugin configuration (the `config` of this plugin's cordis row). */
-export type Config = StageRouterConfig
+/**
+ * Plugin configuration (the `config` of this plugin's cordis row). Both fields
+ * are volatile: the dsh settings service can only read and write volatile
+ * fields, and a volatile change applies live (`loader/volatile-update`)
+ * instead of restarting the plugin and dropping per-session routers.
+ */
+export interface Config {
+  defaultJudge: Volatile<StageRouterConfig['defaultJudge']>
+  schemes: Volatile<StageRouterConfig['schemes']>
+}
 
-export const Config: z<Config> = ConfigSchema
+export const Config: z<Partial<StageRouterConfig>, Config> = z.object({
+  defaultJudge: JudgeSchema.default(DEFAULT_JUDGE).volatile(),
+  schemes: z.array(SchemeSchema).default([]).volatile(),
+}) as unknown as z<Partial<StageRouterConfig>, Config>
 
 /** How long a route availability check is trusted. */
 const ROUTE_CHECK_TTL_MS = 60_000
@@ -47,15 +59,22 @@ function textOf(message: Pick<Message, 'content'>): string {
   return message.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('')
 }
 
-export function apply(ctx: Context, config: Config): void {
+export function apply(ctx: Context, live: Config): void {
   const log = (level: 'debug' | 'info' | 'warn' | 'error', message: string, ...args: unknown[]) => {
     ctx.logger[level](message, ...args)
   }
+  // Current snapshot of the volatile config; every closure below reads these
+  // at call time, so a live settings change reaches them after refresh().
+  const snapshot = (): StageRouterConfig => ({
+    defaultJudge: live.defaultJudge.get() as StageRouterConfig['defaultJudge'],
+    schemes: live.schemes.get() as StageRouterConfig['schemes'],
+  })
+  let config = snapshot()
+  let schemes = new Map(config.schemes.map(scheme => [scheme.id, scheme]))
   for (const issue of validateConfig(config)) log('error', 'stage-router: config %s: %s', issue.path, issue.message)
-  const schemes = new Map(config.schemes.map(scheme => [scheme.id, scheme]))
 
   // ---- virtual provider ----
-  ctx.llm.registerAdapter([PROVIDER], new StageRouterAdapter({
+  const registration = ctx.llm.registerAdapter([PROVIDER], new StageRouterAdapter({
     schemes: () => config.schemes,
     llm: ctx.llm,
     warn: (message, ...args) => log('warn', message, ...args),
@@ -104,14 +123,32 @@ export function apply(ctx: Context, config: Config): void {
     }
   }
 
-  // Report unusable models once at startup; routing still falls back per request.
-  ctx.effect(() => {
+  // Report unusable models at startup and after each change; routing still falls back per request.
+  const checkModels = () => {
     for (const scheme of config.schemes) {
       void checkRoutes(schemeRoutes(scheme, `schemes[${scheme.id}]`), async route => (await usable(route)) ? undefined : 'model unavailable')
         .then(issues => issues.forEach(issue => log('error', 'stage-router: config %s: %s', issue.path, issue.message)))
     }
+  }
+  ctx.effect(() => {
+    checkModels()
     return () => {}
   }, 'stage-router: startup model check')
+
+  // A live settings change: refresh the snapshot, re-list the virtual models
+  // and re-check routes. Session routers rebuild lazily from their projection
+  // when their scheme object changes.
+  // Declared by @deepseek-ai/cordis-plugin-loader, which this package does not import.
+  const onLoaderEvent = ctx.on.bind(ctx) as unknown as (name: string, listener: () => void) => () => void
+  onLoaderEvent('loader/volatile-update', () => {
+    config = snapshot()
+    schemes = new Map(config.schemes.map(scheme => [scheme.id, scheme]))
+    for (const issue of validateConfig(config)) log('error', 'stage-router: config %s: %s', issue.path, issue.message)
+    routeChecks.clear()
+    registration.replace([PROVIDER])
+    checkModels()
+    log('info', 'stage-router: configuration updated (%d scheme(s))', config.schemes.length)
+  })
 
   const routers = new Map<Session, SessionRouter>()
   /** Root agents routed in their current step (set at prompt assembly). */

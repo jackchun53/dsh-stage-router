@@ -157,7 +157,7 @@ const SubagentsSchema: z<SubagentsConfig> = z.object({
   classify: z.boolean().default(true),
 })
 
-const SchemeSchema: z<SchemeConfig> = z.object({
+export const SchemeSchema: z<SchemeConfig> = z.object({
   id: z.string().required(),
   name: z.string().default(''),
   initialStage: z.string().required(),
