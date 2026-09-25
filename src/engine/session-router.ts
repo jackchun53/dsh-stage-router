@@ -73,6 +73,28 @@ export class SessionRouter {
     this.announced = { stage: this.stage, tier: this.tier, lock: this.lock, route: routeKey(this.route) }
   }
 
+  /** Why the router is in its current stage. */
+  get lastReason(): string {
+    return this.reason
+  }
+
+  /** The judgement behind the latest user-message decision, if the judge ran. */
+  get lastJudgement(): JudgeRecord | undefined {
+    return this.judgement
+  }
+
+  /** One-line status for `/stage` and logs. */
+  describe(): string {
+    const stage = this.stageConfig
+    const parts = [
+      `stage ${this.stage ?? '(none yet)'}${stage?.name ? ` (${stage.name})` : ''}`,
+      ...this.tier === undefined ? [] : [`tier ${this.tier}`],
+      ...this.route === undefined ? [] : [`model ${this.route.provider}/${this.route.model}`],
+      this.lock === null ? 'automatic' : `locked to ${this.lock}`,
+    ]
+    return `${parts.join(' · ')}. Stages: ${this.scheme.stages.map(s => s.id).join(', ')}.`
+  }
+
   get stageConfig(): StageConfig | undefined {
     return this.scheme.stages.find(stage => stage.id === this.stage)
   }

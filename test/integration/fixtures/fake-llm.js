@@ -13,6 +13,8 @@
 //   SPAWN                         spawn a foreground subagent with the task "CHILD big job"
 //   FORK                          fork a subagent with the task "CHILD review it"
 // Subagent requests (task starts with CHILD) just answer with text.
+//   CMD=<args>                    the fixture runs `/stage <args>` when the message is claimed
+//                                 (headless never parses slash commands itself)
 // Tier-judge requests (prompt lists "Tiers, lightest first") answer heavy for
 // tasks containing "big", light otherwise.
 import { appendFileSync } from 'node:fs'
@@ -105,6 +107,14 @@ export const inject = ['llm']
 
 export function apply(ctx) {
   ctx.llm.registerAdapter(['fake'], new FakeAdapter())
+  ctx.on('agent/inbox/claimed', ({ agent, message }) => {
+    const arg = /CMD=(\S+)/.exec(textOf(message))?.[1]
+    const commands = ctx.get('commands')
+    if (arg === undefined || commands === undefined || agent.session.header.parentSession !== undefined) return
+    void Promise.resolve()
+      .then(() => commands.execute(agent, `/stage ${arg}`, [], new AbortController().signal))
+      .then(result => LOG && appendFileSync(LOG, JSON.stringify({ kind: 'command', args: arg, result: result?.result ?? null }) + '\n'))
+  })
   // Headless has no human to answer exit_plan_mode's review: approve it.
   ctx.on('user-questions/request', async (request, next) => {
     const question = request.questions?.find(q => q.id === 'plan-review')

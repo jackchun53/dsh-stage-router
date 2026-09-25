@@ -22,6 +22,11 @@ describe('stage routing in a headless session', () => {
       'JUDGE=code TIERS2 continue',      // 8: untagged "big" todo judged heavy → heavy wins
       'JUDGE=code SPAWN delegate',       // 9: spawned child judged heavy → heavy tier model
       'JUDGE=review FORK delegate',      // 10: forked child follows the parent route
+      'CMD=plan JUDGE=review lock it',   // 11: /stage plan runs during this turn
+      'JUDGE=review locked now?',        // 12: lock survives reload; judge skipped
+      'CMD=nope JUDGE=review bad lock',  // 13: unknown stage → command error, lock unchanged
+      'CMD=auto JUDGE=review unlock',    // 14: /stage auto
+      'JUDGE=review free again',         // 15: judge routes again
     ]) {
       turns.push(session.send(prompt))
     }
@@ -109,5 +114,18 @@ describe('stage routing in a headless session', () => {
     expect(routes(turns[10]!)).toEqual(['fake/m-review@high', 'fake/m-review@high'])
     expect(childRoutes(turns[10]!)).toEqual(['fake/m-review@high'])
     for (const call of children(turns[10]!)) expect(call.userSourceKinds).not.toContain('model-selection')
+  })
+
+  it('locks the stage with /stage, durably across reloads, and unlocks with /stage auto', () => {
+    const commands = (turn: TurnResult) => turn.calls.filter(call => call.kind === 'command')
+    expect(commands(turns[11]!)).toEqual([expect.objectContaining({ args: 'plan', result: { kind: 'success', text: 'Stage locked to plan.' } })])
+    expect(routes(turns[12]!)).toEqual(['fake/m-plan@max'])
+    expect(judges(turns[12]!)).toEqual([])
+    expect(mains(turns[12]!)[0]!.notices.at(-1)).toContain('locked')
+    expect(commands(turns[13]!)[0]!.result).toMatchObject({ kind: 'error' })
+    expect(routes(turns[13]!)).toEqual(['fake/m-plan@max'])
+    expect(commands(turns[14]!)[0]!.result).toMatchObject({ kind: 'success' })
+    expect(routes(turns[15]!)).toEqual(['fake/m-review@high'])
+    expect(judges(turns[15]!)).toHaveLength(1)
   })
 })

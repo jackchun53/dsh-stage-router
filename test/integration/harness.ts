@@ -8,7 +8,9 @@ const DSH = join(ROOT, 'node_modules/.bin/dsh')
 const PATCH = join(ROOT, 'test/integration/fixtures/profile.patch.yml')
 
 export interface LlmCall {
-  kind: 'judge' | 'main'
+  kind: 'judge' | 'main' | 'command'
+  args?: string
+  result?: { kind: string; text?: string } | null
   sessionId: string | null
   provider: string
   model: string

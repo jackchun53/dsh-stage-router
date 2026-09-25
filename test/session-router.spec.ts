@@ -179,3 +179,12 @@ describe('SessionRouter tiers', () => {
     expect(await router.resolveRoute([{ content: 'unjudged', status: 'in_progress' }])).toEqual(flash)
   })
 })
+
+describe('SessionRouter.describe', () => {
+  it('summarises stage, model and lock for /stage', async () => {
+    const router = new SessionRouter(scheme, { ...INITIAL_STATE, scheme: scheme.id, stage: 'code', route: flash, notices: 1 }, deps().d)
+    expect(router.describe()).toBe('stage code (编码) · model deepseek-official/deepseek-flash · automatic. Stages: plan, code, review.')
+    router.setLock('review')
+    expect(router.describe()).toContain('locked to review')
+  })
+})

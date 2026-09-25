@@ -1,6 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type { LlmCallConfig, Message, ReasoningEffortId, UserMessage } from '@deepseek-ai/dsh-llm'
+import type {} from '@deepseek-ai/dsh-commands'
 import type {} from '@deepseek-ai/dsh-plan-mode'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-projection'
@@ -14,7 +15,8 @@ import { JudgeCache, runJudge, summarizeRecent } from './engine/judge.js'
 import { SessionRouter, type StageEffect } from './engine/session-router.js'
 import { routeChild } from './engine/subagents.js'
 import { TierClassifier, type TodoLike } from './engine/tiers.js'
-import { INITIAL_STATE, PROJECTION_KEY, persistedScheme, stageProjection, type StageRouterState } from './engine/state.js'
+import { DecisionLog } from './engine/decisions.js'
+import { INITIAL_STATE, PROJECTION_KEY, STAGE_COMMAND, parseStageArgs, persistedScheme, stageProjection, type StageRouterState } from './engine/state.js'
 
 export { PROVIDER } from './adapter.js'
 export type { StageRouterMessageSource, StageRouterState } from './engine/state.js'
@@ -72,6 +74,7 @@ export function apply(ctx: Context, config: Config): void {
 
   // ---- shared services for every session router ----
   const judgeCache = new JudgeCache()
+  const decisions = new DecisionLog()
   const tierClassifier = new TierClassifier(options => ctx.llm.stream(options), (message, ...args) => log('debug', message, ...args))
   const routeChecks = new Map<string, { ok: boolean; at: number }>()
   const usable = async (route: RouteConfig): Promise<boolean> => {
@@ -177,6 +180,28 @@ export function apply(ctx: Context, config: Config): void {
     }
     planMode.set(agent, effect.planMode)
   }
+
+  // ---- /stage command: lock, unlock, status ----
+  ctx.inject(['commands'], commandCtx => {
+    commandCtx.commands.register({
+      name: STAGE_COMMAND,
+      description: 'Show the stage-router stage, lock it (/stage <stage id>) or return to automatic routing (/stage auto)',
+      input: { hint: '<stage id> | auto' },
+      handler: ({ agent, rawInput }) => {
+        const scheme = schemeFor(agent)
+        if (scheme === undefined) return { kind: 'error', text: 'This session is not routed by a stage-router scheme.' }
+        const router = routerFor(agent, scheme)
+        const target = parseStageArgs(rawInput)
+        if (target === undefined) return { kind: 'success', text: router.describe() }
+        if (target !== null && !scheme.stages.some(stage => stage.id === target)) {
+          return { kind: 'error', text: `Unknown stage "${target}". Stages: ${scheme.stages.map(stage => stage.id).join(', ')}.` }
+        }
+        applyEffect(agent, router.setLock(target))
+        log('info', 'stage-router: %s %s', agent.session.id, target === null ? 'unlocked' : `locked to ${target}`)
+        return { kind: 'success', text: target === null ? 'Stage routing is automatic again.' : `Stage locked to ${target}.` }
+      },
+    })
+  })
 
   // ---- stage prompt ----
   let systemPrompt: SystemPrompt | undefined
@@ -359,7 +384,21 @@ export function apply(ctx: Context, config: Config): void {
         const scheme = schemes.get(config.model)
         route = parentRouter?.route ?? (scheme === undefined ? undefined : initialRoute(scheme))
       }
-      if (route !== undefined) stepRoutes.set(agent, { key, route })
+      if (route !== undefined) {
+        stepRoutes.set(agent, { key, route })
+        const source = router ?? undefined
+        decisions.record(agent.session.id, {
+          at: Date.now(),
+          turn,
+          step,
+          stage: source?.stage ?? '(subagent)',
+          tier: source?.tier ?? null,
+          route,
+          reason: source?.lastReason ?? (child != null ? 'subagent' : 'virtual model fallback'),
+          lock: source?.lock ?? null,
+          judge: source?.lastJudgement ?? null,
+        })
+      }
     }
     if (route === undefined) return config
     if (config.provider !== PROVIDER && sameRoute(config as RouteConfig, route)) return config

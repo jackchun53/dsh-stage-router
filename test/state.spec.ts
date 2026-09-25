@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import { INITIAL_STATE, foldStageState, persistedScheme, stageNotice, stageProjection, stateSchema, type StageRouterState } from '../src/engine/state.js'
+import { INITIAL_STATE, foldStageState, parseStageArgs, persistedScheme, stageNotice, stageProjection, stateSchema, type StageRouterState } from '../src/engine/state.js'
 
 const route = { provider: 'fake', model: 'real-code' }
 
@@ -33,7 +33,7 @@ describe('foldStageState', () => {
       asEvent(notice('plan', { from: 'review', lock: 'plan', reason: 'locked' })),
     ])
     expect(state).toEqual({
-      scheme: 'dev', stage: 'plan', tier: null, lock: 'plan', route, reason: 'locked', judge: null, detached: false, notices: 3,
+      scheme: 'dev', stage: 'plan', tier: null, lock: 'plan', route, reason: 'locked', judge: null, detached: false, pendingCommand: null, notices: 3,
     })
   })
 
@@ -90,5 +90,30 @@ describe('tier facts', () => {
     expect((message.source as { summary: string }).summary).toBe('code · heavy · fake/real-code')
     expect(fold([asEvent(message)]).tier).toBe('heavy')
     expect(fold([asEvent(message), asEvent(notice('review'))]).tier).toBeNull()
+  })
+})
+
+describe('/stage command lifecycle', () => {
+  const run = (commandId: string, args: string, name = 'stage') => ({ type: 'command/run', data: { commandId, name, args, source: { kind: 'user' } } })
+  const done = (commandId: string, kind = 'success') => ({ type: 'command/done', data: { commandId, kind } })
+
+  it('parses /stage arguments', () => {
+    expect(parseStageArgs('')).toBeUndefined()
+    expect(parseStageArgs(' status ')).toBeUndefined()
+    expect(parseStageArgs(' auto')).toBeNull()
+    expect(parseStageArgs(' review ')).toBe('review')
+  })
+
+  it('locks only when the command succeeds', () => {
+    const base = fold([asEvent(notice('code'))])
+    expect(fold([asEvent(notice('code')), run('c1', ' review'), done('c1')]).lock).toBe('review')
+    expect([run('c2', ' nope'), done('c2', 'error')].reduce(foldStageState, base).lock).toBeNull()
+    expect([run('c3', ' review'), run('x', 'y', 'plan'), done('c3')].reduce(foldStageState, base).lock).toBe('review')
+  })
+
+  it('unlocks with auto and ignores status queries', () => {
+    const locked = [run('c1', 'review'), done('c1')].reduce(foldStageState, INITIAL_STATE)
+    expect([run('c2', ''), done('c2')].reduce(foldStageState, locked).lock).toBe('review')
+    expect([run('c3', 'auto'), done('c3')].reduce(foldStageState, locked).lock).toBeNull()
   })
 })

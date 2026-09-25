@@ -51,6 +51,8 @@ export interface StageRouterState {
    * (`model/selection`); a later stage-router pick or notice clears it.
    */
   detached: boolean
+  /** A `/stage` command seen in `command/run`, applied when its `command/done` succeeds. */
+  pendingCommand: { id: string; args: string } | null
   /** Number of stage-router notices folded so far. */
   notices: number
 }
@@ -67,7 +69,7 @@ declare module '@deepseek-ai/dsh-session-projection' {
 export const PROJECTION_KEY = 'stage-router'
 
 export const INITIAL_STATE: StageRouterState = {
-  scheme: null, stage: null, tier: null, lock: null, route: null, reason: null, judge: null, detached: false, notices: 0,
+  scheme: null, stage: null, tier: null, lock: null, route: null, reason: null, judge: null, detached: false, pendingCommand: null, notices: 0,
 }
 
 const routeSchema = z.object({
@@ -94,6 +96,7 @@ export const stateSchema = z.object({
   reason: z.string().nullable(),
   judge: judgeSchema.nullable(),
   detached: z.boolean(),
+  pendingCommand: z.object({ id: z.string(), args: z.string() }).nullable(),
   notices: z.number().int().nonnegative(),
 }) as unknown as z.ZodType<StageRouterState>
 
@@ -107,11 +110,37 @@ export function noticeSource(event: { type: string; data?: unknown }): StageRout
 /** Virtual provider id (duplicated from adapter.ts to keep this module standalone). */
 const PROVIDER = 'stage-router'
 
+/** Name of the slash command that locks or unlocks the stage. */
+export const STAGE_COMMAND = 'stage'
+
+/**
+ * What `/stage <args>` asks for: a lock on a stage id, `null` to unlock
+ * (`auto`), or `undefined` for a read-only status query (empty / `status`).
+ */
+export function parseStageArgs(args: string): string | null | undefined {
+  const arg = args.trim()
+  if (arg === '' || arg === 'status') return undefined
+  return arg === 'auto' ? null : arg
+}
+
 /**
  * Pure fold over stage-router notices and explicit model picks
  * (`model/selection`, appended by the Web session controller).
  */
 export function foldStageState(state: StageRouterState, event: { type: string; data?: unknown }): StageRouterState {
+  // `/stage` locks are durable through dsh's own command lifecycle events.
+  if (event.type === 'command/run') {
+    const run = event.data as { commandId?: unknown; name?: unknown; args?: unknown } | undefined
+    if (run?.name !== STAGE_COMMAND || typeof run.commandId !== 'string') return state
+    return { ...state, pendingCommand: { id: run.commandId, args: typeof run.args === 'string' ? run.args : '' } }
+  }
+  if (event.type === 'command/done') {
+    const done = event.data as { commandId?: unknown; kind?: unknown } | undefined
+    const pending = state.pendingCommand
+    if (pending === null || done?.commandId !== pending.id) return state
+    const lock = done.kind === 'success' ? parseStageArgs(pending.args) : undefined
+    return lock === undefined ? { ...state, pendingCommand: null } : { ...state, lock, pendingCommand: null }
+  }
   if (event.type === 'model/selection') {
     const picked = event.data as { provider?: unknown; model?: unknown } | undefined
     if (picked?.provider === PROVIDER && typeof picked.model === 'string') {
@@ -130,6 +159,7 @@ export function foldStageState(state: StageRouterState, event: { type: string; d
     reason: source.reason,
     judge: source.judge ?? null,
     detached: false,
+    pendingCommand: state.pendingCommand,
     notices: state.notices + 1,
   }
 }
