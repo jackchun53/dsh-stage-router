@@ -3,3 +3,5 @@ lib/
 .dsh-home/
 *.log
 web-ui.png
+web-editor.png
+*.fail.png

@@ -26,7 +26,8 @@
     "test": "pnpm build && vitest run",
     "test:unit": "vitest run --project unit",
     "test:integration": "npm run build && vitest run --project integration",
-    "test:web": "pnpm build && node test/e2e/web-ui.mjs"
+    "test:web": "pnpm build && node test/e2e/web-ui.mjs",
+    "test:web:editor": "pnpm build && node test/e2e/web-editor.mjs"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "*",
