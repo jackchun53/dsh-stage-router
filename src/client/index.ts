@@ -1,6 +1,6 @@
 /**
- * Web client entry of dsh-stage-router: the composer stage chip and the
- * per-turn routing summary. Kept defensive on purpose: a client entry that
+ * Web client entry of dsh-stage-router: the composer stage chip (with the
+ * judge log), the per-turn routing summary and the settings section. Kept defensive on purpose: a client entry that
  * fails to activate stops the whole Web UI from booting, so the top-level
  * `inject` names only services every Web profile has and nothing here throws.
  */
@@ -45,6 +45,17 @@ export function apply(ctx: ClientContext): void {
     }, 'stage-router: commands remote')
   })
 
+  // The settings editor and the stage panel's judge log talk to the host's
+  // stageRouter/* remote over the client connection; optional too, both
+  // report when it is missing.
+  let connection: RpcConnection | undefined
+  ctx.inject(['connection'], connectionCtx => {
+    connectionCtx.effect(() => {
+      connection = (connectionCtx as unknown as { connection: RpcConnection }).connection
+      return () => { connection = undefined }
+    }, 'stage-router: connection')
+  })
+  const api = createEditorApi(() => connection)
   ctx.slots.inject('conversation.input.right', () => ctx.slots.register({
     name: 'conversation.input.right',
     id: ID,
@@ -58,24 +69,16 @@ export function apply(ctx: ClientContext): void {
         const done = result.value.result as { kind?: string; text?: string } | undefined
         return done?.kind === 'error' ? done.text ?? '执行失败' : null
       },
+      judgeLog: () => api.judgeLog(sessionId),
     }),
   }, StageChip))
 
-  // The settings editor talks to the host's stageRouter/* remote over the
-  // client connection; optional too, the editor reports when it is missing.
-  let connection: RpcConnection | undefined
-  ctx.inject(['connection'], connectionCtx => {
-    connectionCtx.effect(() => {
-      connection = (connectionCtx as unknown as { connection: RpcConnection }).connection
-      return () => { connection = undefined }
-    }, 'stage-router: connection')
-  })
-  const api = createEditorApi(() => connection)
   const label = ctx.locale.bind(NS)
-  ctx.slots.inject('settings.plugins.tab', () => ctx.slots.register({
-    name: 'settings.plugins.tab',
+  // Its own top-level settings section, right after Models (order 10).
+  ctx.slots.inject('settings.section', () => ctx.slots.register({
+    name: 'settings.section',
     id: ID,
-    order: 50,
+    order: 12,
     label: () => label('editor.tab'),
     locale: NS,
     inject: (): EditorInjected => ({ api }),

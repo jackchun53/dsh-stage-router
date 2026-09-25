@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto'
-import { BlockAssembler, createUserMessage, type GenerateOptions, type ReasoningEffortId } from '@deepseek-ai/dsh-llm'
-import type { JudgeConfig, StageConfig, TierSource, TiersConfig } from '../config/schema.js'
+import type { JevConfig, StageConfig, TierSource, TiersConfig } from '../config/schema.js'
 import { hasTiers } from '../config/validate.js'
-import { JUDGE_SYSTEM, clip, firstObject, type StreamFn } from './judge.js'
+import { askJev, type FetchFn, type JevChoiceQuestion } from './jev.js'
+import { clip } from './judge.js'
+import { logText, type TierJudgeLog } from './judge-log.js'
 
 /** The slice of a todo the tier logic reads. */
 export interface TodoLike {
@@ -39,45 +40,20 @@ export function heaviest(tiers: TiersConfig, ids: readonly (string | undefined)[
   return best
 }
 
-export function renderTierPrompt(tiers: TiersConfig, tasks: readonly string[]): string {
-  return [
-    'Classify each coding task by how much reasoning it needs, choosing exactly one tier per task.',
-    '',
-    'Tiers, lightest first:',
-    ...tiers.levels.map(level => `- ${level.id}: ${level.description || '(no description)'}`),
-    '',
-    'Tasks:',
-    ...tasks.map((task, i) => `${i + 1}. ${clip(task)}`),
-    '',
-    'Reply with JSON only, no prose:',
-    '{"tiers": ["<tier id for task 1>", "<tier id for task 2>", ...]}',
-  ].join('\n')
-}
+/** Characters of one task text sent to Jev. */
+export const TASK_TEXT_LIMIT = 500
 
 /**
- * Parse a tier reply. Accepts `{"tiers": [...]}` or `{"1": "light", ...}`;
- * unknown tiers and missing entries come back as `undefined`.
+ * Jev questions for one batch: one `choice` per task, keyed `t1…tn`, whose
+ * options are the stage's tiers (lightest first) and their descriptions.
  */
-export function parseTierReply(text: string, count: number, tiers: TiersConfig): (string | undefined)[] {
-  const out: (string | undefined)[] = Array.from({ length: count }, () => undefined)
-  const raw = firstObject(text)
-  if (raw === undefined) return out
-  let value: unknown
-  try {
-    value = JSON.parse(raw)
-  } catch {
-    return out
-  }
-  if (typeof value !== 'object' || value === null) return out
-  const record = value as Record<string, unknown>
-  const list = Array.isArray(record.tiers)
-    ? record.tiers
-    : Array.from({ length: count }, (_, i) => record[String(i + 1)])
-  for (let i = 0; i < count; i++) {
-    const tier = list[i]
-    if (typeof tier === 'string' && tierRank(tiers, tier.trim()) >= 0) out[i] = tier.trim()
-  }
-  return out
+export function tierQuestions(tiers: TiersConfig, count: number): Record<string, JevChoiceQuestion> {
+  const criteria = Object.fromEntries(tiers.levels.map(level => [level.id, level.description.trim() || level.id]))
+  return Object.fromEntries(Array.from({ length: count }, (_, i) => [`t${i + 1}`, {
+    type: 'choice' as const,
+    instructions: `判断 tasks 中键为 t${i + 1} 的任务需要哪个档位（选项从轻到重）`,
+    criteria,
+  }]))
 }
 
 function key(stage: StageConfig, text: string): string {
@@ -94,18 +70,21 @@ export class TierClassifier {
   private readonly cache = new Map<string, Promise<string | undefined>>()
 
   constructor(
-    private readonly stream: StreamFn,
+    private readonly fetchFn: FetchFn,
     private readonly log: (message: string, ...args: unknown[]) => void,
     private readonly limit = 2000,
   ) {}
 
-  /** Start judging every text not judged yet, in batches of {@link TIER_BATCH_LIMIT}. */
-  classify(stage: StageConfig, texts: readonly string[], judge: JudgeConfig): void {
+  /**
+   * Start judging every text not judged yet, in batches of {@link TIER_BATCH_LIMIT}.
+   * @param record - receives one judge-log entry per Jev call this starts.
+   */
+  classify(stage: StageConfig, texts: readonly string[], jev: JevConfig, record?: (entry: TierJudgeLog) => void): void {
     if (!hasTiers(stage)) return
     const fresh = [...new Set(texts.map(text => text.trim()))].filter(text => text !== '' && !this.cache.has(key(stage, text)))
     for (let i = 0; i < fresh.length; i += TIER_BATCH_LIMIT) {
       const batch = fresh.slice(i, i + TIER_BATCH_LIMIT)
-      const result = this.judgeBatch(stage.tiers!, batch, judge)
+      const result = this.judgeBatch(stage, batch, jev, record)
       batch.forEach((text, j) => this.remember(key(stage, text), result.then(tiers => tiers[j])))
     }
   }
@@ -120,31 +99,27 @@ export class TierClassifier {
     if (this.cache.size > this.limit) this.cache.delete(this.cache.keys().next().value!)
   }
 
-  private async judgeBatch(tiers: TiersConfig, texts: string[], judge: JudgeConfig): Promise<(string | undefined)[]> {
-    const started = Date.now()
-    const timeout = AbortSignal.timeout(judge.timeoutMs)
-    const options: GenerateOptions = {
-      provider: judge.route.provider,
-      model: judge.route.model,
-      ...judge.route.reasoningEffort === undefined ? {} : { reasoningEffort: judge.route.reasoningEffort as ReasoningEffortId },
-      system: JUDGE_SYSTEM,
-      messages: [createUserMessage({ content: [{ type: 'text', text: renderTierPrompt(tiers, texts) }], source: { kind: 'user' } })],
-      maxTokens: 50 + 20 * texts.length,
-      temperature: 0,
-      signal: timeout,
-    }
-    try {
-      const assembler = new BlockAssembler()
-      for await (const chunk of this.stream(options)) assembler.push(chunk)
-      if (assembler.finish.kind === 'error') throw new Error(assembler.finish.failure.message)
-      const text = assembler.blocks().flatMap(block => block.type === 'text' ? [block.text] : []).join('')
-      const tiersOut = parseTierReply(text, texts.length, tiers)
-      this.log('stage-router: tier judge classified %d task(s) in %dms', texts.length, Date.now() - started)
-      return tiersOut
-    } catch (error) {
-      this.log('stage-router: tier judge failed (%s); using the default tier', timeout.aborted ? `timeout after ${judge.timeoutMs}ms` : String(error))
-      return texts.map(() => undefined)
-    }
+  private async judgeBatch(stage: StageConfig, texts: string[], jev: JevConfig, record?: (entry: TierJudgeLog) => void): Promise<(string | undefined)[]> {
+    const tiers = stage.tiers!
+    const result = await askJev(this.fetchFn, jev, {
+      tasks: texts.map((text, i) => ({ key: `t${i + 1}`, text: clip(text, TASK_TEXT_LIMIT) })),
+    }, tierQuestions(tiers, texts.length))
+    const answers = texts.map((_, i) => {
+      const answer = result.ok ? result.answers[`t${i + 1}`] : undefined
+      return answer !== undefined && tierRank(tiers, answer.choice) >= 0 ? answer : undefined
+    })
+    if (result.ok) this.log('stage-router: Jev tiered %d task(s) in %dms', texts.length, result.elapsedMs)
+    else this.log('stage-router: Jev tier judgement failed (%s); using the default tier', result.error)
+    record?.({
+      kind: 'tier',
+      at: Date.now(),
+      elapsedMs: result.elapsedMs,
+      stage: stage.id,
+      ok: result.ok,
+      ...result.ok ? {} : { error: result.error },
+      tasks: texts.map((text, i) => ({ text: logText(text), tier: answers[i]?.choice ?? null, confidence: answers[i]?.confidence ?? null })),
+    })
+    return answers.map(answer => answer?.choice)
   }
 }
 

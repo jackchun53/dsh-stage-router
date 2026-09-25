@@ -17,12 +17,13 @@
     - id: stage-router
       name: ../../../lib/index.js
       config:
-        defaultJudge:
-          route: { provider: fake, model: m-judge, reasoningEffort: 'off' }
+        jev:
+          baseUrl: http://fake-jev.invalid/v1
+          model: jev-test
+          token: test-token
           timeoutMs: 1500
           minConfidence: 0.6
           contextTurns: 2
-          promptTemplate: null
         schemes:
           - id: test
             name: 测试

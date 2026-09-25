@@ -7,17 +7,17 @@
     - id: stage-router
       name: dsh-stage-router
       config:
-        defaultJudge:
-          route: { provider: deepseek-official, model: deepseek-flash, reasoningEffort: 'off' }
-          timeoutMs: 6000
+        jev:                       # token 在 设置 → 阶段路由 里填写
+          baseUrl: https://api.typesafe.ai/v1
+          model: jev-latest
+          token: ''
+          timeoutMs: 3000
           minConfidence: 0.6
           contextTurns: 2
-          promptTemplate: null
         schemes:
           - id: dev-default
             name: 研发默认
             initialStage: code
-            judge: null
             subagents: { enabled: false, stage: inherit, classify: true }
             stages:
               - id: plan

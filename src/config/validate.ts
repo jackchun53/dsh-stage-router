@@ -4,6 +4,8 @@ export interface ConfigIssue {
   /** Dotted path of the offending field, e.g. `schemes[0].stages[1].id`. */
   path: string
   message: string
+  /** `warning` does not block saving (e.g. an unavailable model, Jev not configured). */
+  severity?: 'warning'
 }
 
 /** True when the stage actually splits into tiers. */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_JUDGE, parseConfig, type SchemeConfig } from '../src/config/schema.js'
+import { DEFAULT_JEV, parseConfig, type SchemeConfig } from '../src/config/schema.js'
 import { EXAMPLE_SCHEME } from '../src/config/defaults.js'
 import { routeChild, type ChildRouteDeps, type ChildView, type ParentView } from '../src/engine/subagents.js'
 
@@ -33,7 +33,7 @@ function deps(judged: Record<string, string> = {}, unusable: string[] = []): Chi
       classify: (_stage, texts) => { classified.push(...texts) },
       lookup: (_stage, text) => text in judged ? Promise.resolve(judged[text]) : undefined,
     },
-    judgeConfig: DEFAULT_JUDGE,
+    jev: DEFAULT_JEV,
     usable: async route => !unusable.includes(route.model),
     waitMs: 20,
   }
@@ -66,7 +66,7 @@ describe('routeChild', () => {
 
   it('judges the task when there is no tag, else falls back to the default tier', async () => {
     expect(await routeChild(child({ task: 'tiny fix' }), parent(scheme(), 'code'), deps({ 'tiny fix': 'light' })))
-      .toMatchObject({ route: light, tier: 'light', reason: '判断器定档' })
+      .toMatchObject({ route: light, tier: 'light', reason: 'Jev 定档' })
     expect(await routeChild(child({ task: 'unknown' }), parent(scheme(), 'code'), deps()))
       .toMatchObject({ route: heavy, tier: 'heavy', reason: '默认档' })
     const noClassify = deps({ 'tiny fix': 'light' })

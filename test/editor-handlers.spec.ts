@@ -1,15 +1,17 @@
 import { describe, expect, it } from 'vitest'
-import type { StreamChunk } from '@deepseek-ai/dsh-llm'
-import { parseConfig } from '../src/config/schema.js'
+import { parseConfig, type StageRouterConfig } from '../src/config/schema.js'
 import { EXAMPLE_SCHEME } from '../src/config/defaults.js'
 import { createEditorHandlers, type EditorDeps } from '../src/editor-handlers.js'
+import { jev, stageJev } from './helpers/fake-jev.js'
 
-const current = parseConfig({ schemes: [EXAMPLE_SCHEME] })
+const current = parseConfig({ jev: { ...jev, token: 'saved-token' }, schemes: [EXAMPLE_SCHEME] })
+const draft = { jev: { ...jev, token: '' }, schemes: [EXAMPLE_SCHEME] }
 
 function deps(patch: Partial<EditorDeps> = {}) {
   const writes: { ns: string; section: object; revision?: number }[] = []
   let revision = 3
-  let stored: unknown = { schemes: current.schemes, defaultJudge: current.defaultJudge }
+  const judge = stageJev('review')
+  let stored: unknown = { schemes: current.schemes, jev: { ...current.jev, token: undefined } }
   const d: EditorDeps = {
     current: () => current,
     settings: () => ({
@@ -21,13 +23,10 @@ function deps(patch: Partial<EditorDeps> = {}) {
         revision++
       },
     }),
-    stream: async function* (): AsyncIterable<StreamChunk> {
-      const text = '{"stage":"review","confidence":0.9}'
-      yield { type: 'block-start', index: 0, blockType: 'text' }
-      yield { type: 'text-delta', index: 0, text }
-      yield { type: 'block-end', index: 0, block: { type: 'text', text } }
-      yield { type: 'finish', reason: { kind: 'stop' } }
-    },
+    fetch: judge.fetch,
+    judgeLog: (sessionId, limit) => sessionId === 's1'
+      ? [{ kind: 'tier' as const, at: 1, elapsedMs: 2, stage: 'code', ok: true, tasks: [] }].slice(0, limit)
+      : [],
     usable: async route => route.model !== 'deepseek-v4-pro',
     providers: () => [{ id: 'deepseek-official', name: 'DeepSeek' }, { id: 'stage-router', name: 'Stage Router' }, { id: 'broken', name: 'Broken' }],
     listModels: async provider => {
@@ -40,7 +39,7 @@ function deps(patch: Partial<EditorDeps> = {}) {
     }),
     ...patch,
   }
-  return { handlers: createEditorHandlers(d), writes }
+  return { handlers: createEditorHandlers(d), writes, jevCalls: judge.calls }
 }
 
 describe('editor handlers', () => {
@@ -50,18 +49,42 @@ describe('editor handlers', () => {
     expect(view.config.schemes[0]!.id).toBe('dev-default')
   })
 
+  it('never returns the Jev token, only whether one is saved', () => {
+    const view = deps().handlers.getConfig()
+    expect(view.jevTokenSet).toBe(true)
+    expect(view.config.jev.token).toBe('')
+    expect(view.config.jev.baseUrl).toBe(jev.baseUrl)
+    expect(JSON.stringify(view)).not.toContain('saved-token')
+    expect(JSON.stringify(deps({ settings: () => undefined }).handlers.getConfig())).not.toContain('saved-token')
+  })
+
+  it('keeps the saved token for a blank draft token, replaces or clears it on request', async () => {
+    const keep = deps()
+    await keep.handlers.save(draft, 3)
+    expect((keep.writes[0]!.section as StageRouterConfig).jev.token).toBe('saved-token')
+    const replace = deps()
+    await replace.handlers.save({ ...draft, jev: { ...jev, token: 'new-token' } }, 3)
+    expect((replace.writes[0]!.section as StageRouterConfig).jev.token).toBe('new-token')
+    const clear = deps()
+    const saved = await clear.handlers.save(draft, 3, true)
+    expect((clear.writes[0]!.section as StageRouterConfig).jev.token).toBe('')
+    expect(saved.warnings.map(w => w.path)).toContain('jev')
+  })
+
   it('falls back to the running config when settings cannot edit the row', () => {
     expect(deps({ settings: () => undefined }).handlers.getConfig()).toMatchObject({ revision: -1, writable: false })
   })
 
   it('validates with model availability', async () => {
-    const { issues } = await deps().handlers.validate({ schemes: [EXAMPLE_SCHEME] })
+    const { issues } = await deps().handlers.validate(draft)
     expect(issues.map(i => i.path)).toContain('schemes[0].stages[0].route')
+    expect(issues.map(i => i.path)).not.toContain('jev')
+    expect((await deps().handlers.validate(draft, true)).issues.map(i => i.path)).toContain('jev')
   })
 
   it('saves a valid draft, returning model warnings and the new revision', async () => {
     const { handlers, writes } = deps()
-    const saved = await handlers.save({ schemes: [EXAMPLE_SCHEME] }, 3)
+    const saved = await handlers.save(draft, 3)
     expect(writes).toHaveLength(1)
     expect(writes[0]!.ns).toBe('stage-router')
     expect(saved.revision).toBe(4)
@@ -77,17 +100,25 @@ describe('editor handlers', () => {
   })
 
   it('reports a stale revision and a missing settings service', async () => {
-    await expect(deps().handlers.save({ schemes: [EXAMPLE_SCHEME] }, 1)).rejects.toMatchObject({
+    await expect(deps().handlers.save(draft, 1)).rejects.toMatchObject({
       code: 'stage-router/rejected', details: { reason: 'SETTINGS_CONFLICT' },
     })
-    await expect(deps({ settings: () => undefined }).handlers.save({ schemes: [EXAMPLE_SCHEME] }, 1)).rejects.toMatchObject({
+    await expect(deps({ settings: () => undefined }).handlers.save(draft, 1)).rejects.toMatchObject({
       code: 'stage-router/unavailable',
     })
   })
 
-  it('tries the judge on a draft', async () => {
-    const result = await deps().handlers.tryJudge({ draft: { schemes: [EXAMPLE_SCHEME] }, scheme: 'dev-default', current: 'code', message: 'review it' })
+  it('tries Jev on a draft with the saved token', async () => {
+    const { handlers, jevCalls } = deps()
+    const result = await handlers.tryJudge({ draft, scheme: 'dev-default', current: 'code', message: 'review it' })
     expect(result.decision).toMatchObject({ kind: 'goto', stage: 'review' })
+    expect(jevCalls[0]!.headers.authorization).toBe('Bearer saved-token')
+  })
+
+  it('returns one session judge log', () => {
+    const { handlers } = deps()
+    expect(handlers.judgeLog('s1').entries).toHaveLength(1)
+    expect(handlers.judgeLog('s2').entries).toEqual([])
   })
 
   it('builds a model catalog without itself and survives a failing provider', async () => {

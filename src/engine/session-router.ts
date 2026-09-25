@@ -1,15 +1,19 @@
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
-import type { JudgeConfig, RouteConfig, SchemeConfig, StageConfig, TransitionEvent } from '../config/schema.js'
+import type { JevConfig, RouteConfig, SchemeConfig, StageConfig, TransitionEvent } from '../config/schema.js'
 import type { JudgeInput, TimedJudgement } from './judge.js'
+import { logText, type StageJudgeLog, type TierJudgeLog } from './judge-log.js'
 import { pickTier, type TierClassifier, type TodoLike } from './tiers.js'
 import { stageNotice, type JudgeRecord, type StageRouterState } from './state.js'
 import { applyJudgement, decide, type Decision, type MachineState } from './transitions.js'
 
 /** Host services one session's router needs; the plugin wires them to dsh. */
 export interface RouterDeps {
-  /** Judge one message; the plugin caches by (session, message). */
-  judge(input: JudgeInput, config: JudgeConfig, messageId: string): Promise<TimedJudgement>
-  judgeConfig(scheme: SchemeConfig): JudgeConfig
+  /** Ask Jev about one message; the plugin caches by (session, message). */
+  judge(input: JudgeInput, jev: JevConfig, messageId: string): Promise<TimedJudgement>
+  /** Current Jev settings. */
+  jev(): JevConfig
+  /** Receives one judge-log entry per Jev call (stage or tier) for this session. */
+  record?(entry: StageJudgeLog | TierJudgeLog): void
   /** Whether a route resolves to a usable model (cached by the plugin). */
   usable(route: RouteConfig): Promise<boolean>
   /** Picker default outside stage-router, used as the last fallback. */
@@ -50,6 +54,8 @@ export class SessionRouter {
   route: RouteConfig | undefined
   private reason = '恢复会话'
   private judgement: JudgeRecord | undefined
+  /** Message whose judgement was last written to the judge log (a retried step must not log twice). */
+  private loggedMessage: string | undefined
   private announced: { stage: string | null; tier: string | undefined; lock: string | null; route: string }
   /** Plan-mode state seen at the end of the last pre-step; `undefined` until observed. */
   private planActive: boolean | undefined
@@ -113,20 +119,41 @@ export class SessionRouter {
       this.judgement = undefined
       return this.apply(decision)
     }
-    const config = this.deps.judgeConfig(this.scheme)
+    const jev = this.deps.jev()
     const candidates = decision.candidates
     const byId = new Map(this.scheme.stages.map(stage => [stage.id, stage]))
+    const from = this.stage
     const result = await this.deps.judge({
-      current: this.stage,
+      current: from,
+      ...from === null ? {} : { currentDescription: byId.get(from)?.description ?? '' },
       candidates: candidates.map(id => ({ id, description: byId.get(id)?.description ?? '' })),
       recent: turn.recent,
       message: turn.text,
-    }, config, turn.messageId)
+    }, jev, turn.messageId)
     this.judgement = result.ok
       ? { ok: true, stage: result.stage, confidence: result.confidence, reason: result.reason, elapsedMs: result.elapsedMs }
       : { ok: false, error: result.error, elapsedMs: result.elapsedMs }
-    if (!result.ok) this.deps.log('warn', 'stage-router: judge failed (%s), staying in %s', result.error, this.stage ?? 'initial stage')
-    return this.apply(applyJudgement(this.machine, result, candidates, config.minConfidence, this.scheme.initialStage))
+    if (!result.ok) this.deps.log('warn', 'stage-router: Jev failed (%s), staying in %s', result.error, this.stage ?? 'initial stage')
+    const outcome = applyJudgement(this.machine, result, candidates, jev.minConfidence, this.scheme.initialStage)
+    const effect = this.apply(outcome)
+    if (this.loggedMessage !== turn.messageId) {
+      this.loggedMessage = turn.messageId
+      this.deps.record?.({
+        kind: 'stage',
+        at: Date.now(),
+        elapsedMs: result.elapsedMs,
+        message: logText(turn.text),
+        from,
+        candidates,
+        ok: result.ok,
+        ...result.ok
+          ? { choice: result.stage, confidence: result.confidence, ...result.probabilities === undefined ? {} : { probabilities: result.probabilities } }
+          : { error: result.error },
+        to: this.stage,
+        reason: this.reason,
+      })
+    }
+    return effect
   }
 
   /** Apply a non-message trigger (`plan_mode_on`, `plan_approved`, `todos_done`, …). */
@@ -219,7 +246,7 @@ export class SessionRouter {
   classifyTodos(todos: readonly TodoLike[] | null | undefined): void {
     const stage = this.stageConfig
     if (stage === undefined || todos == null || todos.length === 0) return
-    this.deps.tiers.classify(stage, todos.map(todo => todo.content), this.deps.judgeConfig(this.scheme))
+    this.deps.tiers.classify(stage, todos.map(todo => todo.content), this.deps.jev(), this.deps.record)
   }
 
   /**

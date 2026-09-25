@@ -10,9 +10,11 @@ import type {} from '@deepseek-ai/dsh-user-questions'
 import z from '@deepseek-ai/schemastery'
 import type { Volatile } from '@deepseek-ai/cordis'
 import { PROVIDER, StageRouterAdapter, initialRoute } from './adapter.js'
-import { DEFAULT_JUDGE, JudgeSchema, SchemeSchema, effectiveJudge, type RouteConfig, type SchemeConfig, type StageRouterConfig } from './config/schema.js'
+import { DEFAULT_JEV, JevSchema, SchemeSchema, type RouteConfig, type SchemeConfig, type StageRouterConfig } from './config/schema.js'
 import { checkRoutes, schemeRoutes, validateConfig } from './config/validate.js'
 import { JudgeCache, runJudge, summarizeRecent } from './engine/judge.js'
+import { globalFetch } from './engine/jev.js'
+import { JudgeLog } from './engine/judge-log.js'
 import { SessionRouter, type StageEffect } from './engine/session-router.js'
 import { routeChild } from './engine/subagents.js'
 import { TierClassifier, type TodoLike } from './engine/tiers.js'
@@ -35,12 +37,12 @@ export const inject = ['llm', 'sessionProjections']
  * instead of restarting the plugin and dropping per-session routers.
  */
 export interface Config {
-  defaultJudge: Volatile<StageRouterConfig['defaultJudge']>
+  jev: Volatile<StageRouterConfig['jev']>
   schemes: Volatile<StageRouterConfig['schemes']>
 }
 
 export const Config: z<Partial<StageRouterConfig>, Config> = z.object({
-  defaultJudge: JudgeSchema.default(DEFAULT_JUDGE).volatile(),
+  jev: JevSchema.default(DEFAULT_JEV).volatile(),
   schemes: z.array(SchemeSchema).default([]).volatile(),
 }) as unknown as z<Partial<StageRouterConfig>, Config>
 
@@ -67,7 +69,7 @@ export function apply(ctx: Context, live: Config): void {
   // Current snapshot of the volatile config; every closure below reads these
   // at call time, so a live settings change reaches them after refresh().
   const snapshot = (): StageRouterConfig => ({
-    defaultJudge: live.defaultJudge.get() as StageRouterConfig['defaultJudge'],
+    jev: live.jev.get() as StageRouterConfig['jev'],
     schemes: live.schemes.get() as StageRouterConfig['schemes'],
   })
   let config = snapshot()
@@ -95,7 +97,8 @@ export function apply(ctx: Context, live: Config): void {
   // ---- shared services for every session router ----
   const judgeCache = new JudgeCache()
   const decisions = new DecisionLog()
-  const tierClassifier = new TierClassifier(options => ctx.llm.stream(options), (message, ...args) => log('debug', message, ...args))
+  const judgeLog = new JudgeLog()
+  const tierClassifier = new TierClassifier(globalFetch, (message, ...args) => log('debug', message, ...args))
   const routeChecks = new Map<string, { ok: boolean; at: number }>()
   const usable = async (route: RouteConfig): Promise<boolean> => {
     const key = `${route.provider}/${route.model}@${route.reasoningEffort ?? ''}`
@@ -203,12 +206,13 @@ export function apply(ctx: Context, live: Config): void {
     const existing = routers.get(agent.session)
     if (existing !== undefined && existing.scheme === scheme) return existing
     const router = new SessionRouter(scheme, persisted(agent.session), {
-      judge: (input, judgeConfig, messageId) => judgeCache.run(
+      judge: (input, jev, messageId) => judgeCache.run(
         agent.session.id,
         messageId,
-        () => runJudge(options => ctx.llm.stream(options), judgeConfig, input),
+        () => runJudge(globalFetch, jev, input),
       ),
-      judgeConfig: s => effectiveJudge(config.defaultJudge, s),
+      jev: () => config.jev,
+      record: entry => judgeLog.record(agent.session.id, entry),
       usable,
       defaultRoute: () => {
         const fallback = defaultSelection()
@@ -241,7 +245,8 @@ export function apply(ctx: Context, live: Config): void {
   ctx.plugin(StageRouterEditorRemote, createEditorHandlers({
     current: () => config,
     settings: () => ctx.get('settings'),
-    stream: options => ctx.llm.stream(options),
+    fetch: globalFetch,
+    judgeLog: (sessionId, limit) => judgeLog.recent(sessionId, limit),
     usable,
     providers: () => ctx.llm.listProviders(),
     listModels: provider => ctx.llm.listModels(provider),
@@ -364,7 +369,8 @@ export function apply(ctx: Context, live: Config): void {
       todos: projection<TodoLike[] | null>(parentAgent.session, 'todos'),
     }, {
       tiers: tierClassifier,
-      judgeConfig: effectiveJudge(config.defaultJudge, parentRouter.scheme),
+      jev: config.jev,
+      record: entry => judgeLog.record(parentAgent.session.id, entry),
       usable,
     })
     if (decided !== undefined) {
@@ -406,11 +412,10 @@ export function apply(ctx: Context, live: Config): void {
       const message = claimed.get(agent)
       if (message !== undefined) {
         claimed.delete(agent)
-        const judgeConfig = effectiveJudge(config.defaultJudge, scheme)
         applyEffect(agent, await router.onUserMessage({
           messageId: message.id,
           text: textOf(message),
-          recent: summarizeRecent(agent.session.deriveMessages(), judgeConfig.contextTurns),
+          recent: summarizeRecent(agent.session.deriveMessages(), config.jev.contextTurns),
         }))
       }
       // Swallow the plan-mode switch this router just asked for.

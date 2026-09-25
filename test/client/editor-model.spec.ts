@@ -4,7 +4,7 @@ import { EXAMPLE_SCHEME } from '../../src/config/defaults.js'
 import { validateConfig } from '../../src/config/validate.js'
 import {
   addScheme, addStage, addTransition, duplicateScheme, edges, freshId, issuesAt, move, moveStage, normalizeIssues,
-  removeScheme, removeStage, removeTransition, renameStage, setDefaultJudge, toggleTiers, updateScheme, updateStage,
+  removeScheme, removeStage, removeTransition, renameStage, setJev, toggleTiers, updateScheme, updateStage,
 } from '../../src/client/editor/model.js'
 
 const draft = () => parseConfig({ schemes: [EXAMPLE_SCHEME] })
@@ -78,8 +78,8 @@ describe('editor model', () => {
     expect(graph.some(edge => edge.from === edge.to)).toBe(false)
   })
 
-  it('edits the default judge and a scheme', () => {
-    expect(setDefaultJudge(draft(), { timeoutMs: 100 }).defaultJudge.timeoutMs).toBe(100)
+  it('edits Jev and a scheme', () => {
+    expect(setJev(draft(), { timeoutMs: 100 }).jev.timeoutMs).toBe(100)
     expect(updateScheme(draft(), 0, s => ({ ...s, name: 'X' })).schemes[0]!.name).toBe('X')
   })
 

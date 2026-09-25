@@ -1,11 +1,12 @@
-// Integration fixture: a keyless `fake` provider plus a plan-review answerer.
-// Main-loop requests carry a sessionId; judge requests do not. Every request is
-// appended to FAKE_LLM_LOG as one JSON line.
+// Integration fixture: a keyless `fake` provider, a fake Jev behind
+// http://fake-jev.invalid (a `fetch` interceptor in this process) and a
+// plan-review answerer. Every model request and Jev call is appended to
+// FAKE_LLM_LOG as one JSON line (Jev calls as kind "judge").
 //
 // Scripting (keywords in the latest real user message):
-//   JUDGE=<stage>[@<confidence>]  judge answers that stage (default confidence 0.9)
-//   JUDGE=garbage                 judge answers non-JSON
-//   JUDGE=slow                    judge never answers (hits the timeout)
+//   JUDGE=<stage>[@<confidence>]  Jev picks that stage (default confidence 0.9)
+//   JUDGE=garbage                 Jev answers a body without answers
+//   JUDGE=slow                    Jev never answers (hits the timeout)
 //   TODO                          assistant calls todo_write with one completed item
 //   EXITPLAN                      assistant calls exit_plan_mode
 //   TIERS1                        todo_write: "[T1][light] small fix" in progress, "big refactor" pending
@@ -16,8 +17,8 @@
 //   CMD=<args>                    the fixture runs `/stage <args>` when the message is claimed
 //                                 (underscores become spaces: CMD=tier_T1_heavy)
 //                                 (headless never parses slash commands itself)
-// Tier-judge requests (prompt lists "Tiers, lightest first") answer heavy for
-// tasks containing "big", light otherwise.
+// Jev tier questions (state.tasks) answer heavy for tasks containing "big",
+// light otherwise.
 import { appendFileSync } from 'node:fs'
 import { LlmAdapter, ToolCallId } from '@deepseek-ai/dsh-llm'
 
@@ -57,11 +58,10 @@ class FakeAdapter extends LlmAdapter {
 
   async * stream(options) {
     const messages = options.messages ?? []
-    const judge = options.sessionId === undefined
     const lastUser = [...messages].reverse().find(m => m.role === 'user' && m.source?.kind === 'user')
     const system = messages.filter(m => m.role === 'system').map(textOf).join('\n') + (options.system ?? '')
     const entry = {
-      kind: judge ? 'judge' : 'main',
+      kind: 'main',
       sessionId: options.sessionId ?? null,
       provider: options.provider,
       model: options.model,
@@ -69,23 +69,9 @@ class FakeAdapter extends LlmAdapter {
       lastRole: messages.at(-1)?.role,
       userSourceKinds: messages.filter(m => m.role === 'user').map(m => m.source?.kind),
       notices: messages.filter(m => m.source?.kind === 'stage-router').map(textOf),
-      system: judge ? undefined : system,
+      system,
     }
     if (LOG) appendFileSync(LOG, JSON.stringify(entry) + '\n')
-    if (judge) {
-      const prompt = textOf(messages.at(-1))
-      if (prompt.includes('Tiers, lightest first')) {
-        const tasks = [...prompt.matchAll(/^\d+\. (.*)$/gm)].map(match => match[1])
-        return yield * text(JSON.stringify({ tiers: tasks.map(task => task.includes('big') ? 'heavy' : 'light') }))
-      }
-      const marker = /JUDGE=(\w+)(?:@([\d.]+))?/.exec(prompt.split('New user message:').at(-1) ?? '')
-      if (marker?.[1] === 'slow') {
-        await new Promise((_, reject) => options.signal?.addEventListener('abort', () => reject(new Error('aborted'))))
-      }
-      if (marker?.[1] === 'garbage') return yield * text('I am not sure, maybe planning?')
-      if (marker === null) return yield * text('{"stage":"none","confidence":0}')
-      return yield * text(JSON.stringify({ stage: marker[1], confidence: Number(marker[2] ?? 0.9), reason: 'scripted' }))
-    }
     const prompt = textOf(lastUser)
     // A stage notice may follow a tool result, so "continuation" means any
     // tool message after the last real user message.
@@ -106,8 +92,42 @@ class FakeAdapter extends LlmAdapter {
 export const name = 'fake-llm'
 export const inject = ['llm']
 
+const FAKE_JEV = 'http://fake-jev.invalid/v1/systemone'
+
+const json = body => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } })
+
+async function fakeJev(init) {
+  const body = JSON.parse(init.body)
+  const keys = Object.keys(body.questions ?? {})
+  if (LOG) {
+    appendFileSync(LOG, JSON.stringify({
+      kind: 'judge', provider: 'jev', model: body.model, reasoningEffort: null, sessionId: null,
+      auth: init.headers?.authorization ?? null, questions: keys, userSourceKinds: [], notices: [],
+    }) + '\n')
+  }
+  if (Array.isArray(body.state?.tasks)) {
+    return json({ answers: Object.fromEntries(body.state.tasks.map(task => {
+      const tier = task.text.includes('big') ? 'heavy' : 'light'
+      return [task.key, { type: 'choice', choice: tier, probabilities: { [tier]: 0.9 } }]
+    })) })
+  }
+  const marker = /JUDGE=(\w+)(?:@([\d.]+))?/.exec(String(body.state?.prompt ?? ''))
+  if (marker?.[1] === 'slow') {
+    await new Promise((_, reject) => init.signal?.addEventListener('abort', () => reject(new Error('aborted'))))
+  }
+  if (marker?.[1] === 'garbage') return json({ nonsense: true })
+  const stage = marker?.[1] ?? 'none'
+  const confidence = marker === null ? 0 : Number(marker[2] ?? 0.9)
+  return json({ answers: { stage: { type: 'choice', choice: stage, probabilities: { [stage]: confidence } } } })
+}
+
 export function apply(ctx) {
   ctx.llm.registerAdapter(['fake'], new FakeAdapter())
+  ctx.effect(() => {
+    const realFetch = globalThis.fetch
+    globalThis.fetch = (url, init) => String(url) === FAKE_JEV ? fakeJev(init) : realFetch(url, init)
+    return () => { globalThis.fetch = realFetch }
+  }, 'fake-llm: fake Jev')
   ctx.on('agent/inbox/claimed', ({ agent, message }) => {
     const arg = /CMD=(\S+)/.exec(textOf(message))?.[1]
     const commands = ctx.get('commands')

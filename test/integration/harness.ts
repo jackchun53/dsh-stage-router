@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
 const ROOT = resolve(import.meta.dirname, '../..')
-const DSH = join(ROOT, 'node_modules/.bin/dsh')
+// Run dsh's JS entry with this Node: the .bin shim is not executable on Windows.
+const DSH = join(ROOT, 'node_modules/@deepseek-ai/dsh/lib/bin.js')
 const PATCH = join(ROOT, 'test/integration/fixtures/profile.patch.yml')
 
 export interface LlmCall {
@@ -19,6 +20,9 @@ export interface LlmCall {
   userSourceKinds: string[]
   notices: string[]
   system?: string
+  /** Jev calls: the Authorization header and the question keys. */
+  auth?: string | null
+  questions?: string[]
 }
 
 export interface TurnResult {
@@ -50,7 +54,7 @@ export class HeadlessSession {
     const args = ['--profile', 'headless', '--patch', PATCH, '--json']
     if (this.sessionId !== undefined) args.push('--session-id', this.sessionId)
     args.push(prompt)
-    const run = spawnSync(DSH, args, {
+    const run = spawnSync(process.execPath, [DSH, ...args], {
       cwd: join(this.dir, 'cwd'),
       encoding: 'utf8',
       timeout: 120_000,

@@ -11,20 +11,20 @@ export interface RouteConfig {
   reasoningEffort?: string
 }
 
-export interface JudgeConfig {
-  route: RouteConfig
-  /** Abort the judge call after this many milliseconds and stay in the current stage. */
+/** The Jev judge (`POST <baseUrl>/systemone`), the only stage and tier judge. */
+export interface JevConfig {
+  /** API base, e.g. `https://api.typesafe.ai/v1`; requests go to `<baseUrl>/systemone`. */
+  baseUrl: string
+  model: string
+  /** Bearer token; a settings secret, never sent to the Web client. */
+  token: string
+  /** Abort a Jev call after this many milliseconds and stay in the current stage. */
   timeoutMs: number
   /** Judgements below this confidence are ignored. */
   minConfidence: number
-  /** Recent conversation turns passed to the judge, each clipped to 800 characters. */
+  /** Recent conversation turns passed to Jev, each clipped to 800 characters. */
   contextTurns: number
-  /** Prompt template; `null` uses the built-in default. */
-  promptTemplate: string | null
 }
-
-/** Per-scheme judge override: any subset of {@link JudgeConfig}. */
-export type JudgeOverride = Partial<JudgeConfig>
 
 export type TierSource = typeof TIER_SOURCES[number]
 
@@ -78,14 +78,13 @@ export interface SchemeConfig {
   id: string
   name: string
   initialStage: string
-  judge?: JudgeOverride | null
   subagents: SubagentsConfig
   stages: StageConfig[]
   transitions: TransitionConfig[]
 }
 
 export interface StageRouterConfig {
-  defaultJudge: JudgeConfig
+  jev: JevConfig
   schemes: SchemeConfig[]
 }
 
@@ -95,28 +94,29 @@ const Route: z<RouteConfig> = z.object({
   reasoningEffort: z.string().description('Reasoning effort id; provider default when empty'),
 })
 
-export const JudgeSchema: z<JudgeConfig> = z.object({
-  route: Route.required(),
-  timeoutMs: z.natural().default(6000),
-  minConfidence: z.number().min(0).max(1).default(0.6),
-  contextTurns: z.natural().default(2),
-  promptTemplate: z.union([z.string(), z.const(null)]).default(null),
-})
+export const DEFAULT_JEV_BASE_URL = 'https://api.typesafe.ai/v1'
 
-// Inner fields stay optional: schemastery resolves an absent optional object
-// as `{}`, and a partial override must not require a route.
-const RouteOverride: z<Partial<RouteConfig>> = z.object({
-  provider: z.string(),
-  model: z.string(),
-  reasoningEffort: z.string(),
-})
+export const DEFAULT_JEV: JevConfig = {
+  baseUrl: DEFAULT_JEV_BASE_URL,
+  model: 'jev-latest',
+  token: '',
+  timeoutMs: 3000,
+  minConfidence: 0.6,
+  contextTurns: 2,
+}
 
-const JudgeOverrideSchema: z<JudgeOverride> = z.object({
-  route: RouteOverride as z<RouteConfig>,
-  timeoutMs: z.natural(),
-  minConfidence: z.number().min(0).max(1),
-  contextTurns: z.natural(),
-  promptTemplate: z.union([z.string(), z.const(null)]),
+/** Jev is usable once it has an address and a token. */
+export function jevConfigured(jev: Pick<JevConfig, 'baseUrl' | 'token'>): boolean {
+  return jev.baseUrl.trim() !== '' && jev.token.trim() !== ''
+}
+
+export const JevSchema: z<JevConfig> = z.object({
+  baseUrl: z.string().default(DEFAULT_JEV.baseUrl),
+  model: z.string().default(DEFAULT_JEV.model),
+  token: z.string().role('secret').default(''),
+  timeoutMs: z.natural().default(DEFAULT_JEV.timeoutMs),
+  minConfidence: z.number().min(0).max(1).default(DEFAULT_JEV.minConfidence),
+  contextTurns: z.natural().default(DEFAULT_JEV.contextTurns),
 })
 
 const TierLevelSchema: z<TierLevel> = z.object({
@@ -159,45 +159,35 @@ export const SchemeSchema: z<SchemeConfig> = z.object({
   id: z.string().required(),
   name: z.string().default(''),
   initialStage: z.string().required(),
-  judge: z.union([JudgeOverrideSchema, z.const(null)]).default(null),
   subagents: SubagentsSchema.default({ enabled: false, stage: 'inherit', classify: true }),
   stages: z.array(StageSchema).default([]),
   transitions: z.array(TransitionSchema).default([]),
 })
 
-export const DEFAULT_JUDGE: JudgeConfig = {
-  route: { provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'off' },
-  timeoutMs: 6000,
-  minConfidence: 0.6,
-  contextTurns: 2,
-  promptTemplate: null,
-}
-
 export const ConfigSchema: z<StageRouterConfig> = z.object({
-  defaultJudge: JudgeSchema.default(DEFAULT_JUDGE),
+  jev: JevSchema.default(DEFAULT_JEV),
   schemes: z.array(SchemeSchema).default([]),
 })
 
-/** The judge settings a scheme actually uses: its override merged over the default. */
-export function effectiveJudge(defaults: JudgeConfig, scheme: Pick<SchemeConfig, 'judge'>): JudgeConfig {
-  const override = scheme.judge
-  if (override == null) return defaults
-  const merged: JudgeConfig = { ...defaults }
-  for (const key of Object.keys(override) as (keyof JudgeConfig)[]) {
-    const value = override[key]
-    if (value === undefined) continue
-    // An absent route resolves as `{}`; only a complete route overrides.
-    if (key === 'route' && !isCompleteRoute(value as Partial<RouteConfig>)) continue
-    Object.assign(merged, { [key]: value })
-  }
-  return merged
-}
-
-function isCompleteRoute(route: Partial<RouteConfig>): route is RouteConfig {
-  return typeof route.provider === 'string' && route.provider !== '' && typeof route.model === 'string' && route.model !== ''
-}
-
 /** Resolve raw YAML-shaped input into a full config; throws a schemastery ValidationError. */
 export function parseConfig(input: unknown): StageRouterConfig {
-  return ConfigSchema(input as StageRouterConfig)
+  return ConfigSchema(dropLegacy(input) as StageRouterConfig)
+}
+
+/**
+ * Drop the fields of the old model-based judge (`defaultJudge`, per-scheme
+ * `judge`) so configs written before the switch to Jev still load cleanly.
+ */
+export function dropLegacy(input: unknown): unknown {
+  if (typeof input !== 'object' || input === null) return input
+  const { defaultJudge: _judge, ...rest } = input as Record<string, unknown>
+  if (!Array.isArray(rest.schemes)) return rest
+  return {
+    ...rest,
+    schemes: rest.schemes.map(scheme => {
+      if (typeof scheme !== 'object' || scheme === null) return scheme
+      const { judge: _override, ...kept } = scheme as Record<string, unknown>
+      return kept
+    }),
+  }
 }

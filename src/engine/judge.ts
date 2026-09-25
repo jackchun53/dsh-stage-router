@@ -1,10 +1,9 @@
-import { BlockAssembler, createUserMessage, type GenerateOptions, type Message, type ReasoningEffortId, type StreamChunk } from '@deepseek-ai/dsh-llm'
-import type { JudgeConfig } from '../config/schema.js'
-import { DEFAULT_JUDGE_TEMPLATE } from '../config/defaults.js'
+import type { Message } from '@deepseek-ai/dsh-llm'
+import type { JevConfig } from '../config/schema.js'
+import { askJev, type FetchFn } from './jev.js'
 import type { Judgement } from './transitions.js'
 
-/** The slice of `ctx.llm` the judge needs. */
-export type StreamFn = (options: GenerateOptions) => AsyncIterable<StreamChunk>
+export type { FetchFn } from './jev.js'
 
 export interface JudgeCandidate {
   id: string
@@ -14,6 +13,8 @@ export interface JudgeCandidate {
 export interface JudgeInput {
   /** Current stage id, `null` before the first message. */
   current: string | null
+  /** Description of the current stage, when there is one. */
+  currentDescription?: string
   candidates: JudgeCandidate[]
   /** Pre-rendered recent conversation excerpt (see {@link summarizeRecent}). */
   recent: string
@@ -21,12 +22,22 @@ export interface JudgeInput {
   message: string
 }
 
-export type TimedJudgement = Judgement & { elapsedMs: number }
+export type TimedJudgement = Judgement & {
+  elapsedMs: number
+  /** Jev's probability per candidate stage, when it answered. */
+  probabilities?: Record<string, number>
+}
 
 /** Each recent-conversation segment is clipped to this many characters. */
 export const SEGMENT_LIMIT = 800
+/** The user message is clipped to this many characters before it goes to Jev. */
+export const MESSAGE_LIMIT = 4000
 
-export const JUDGE_SYSTEM = 'You are a routing classifier for a coding assistant. Reply with a single JSON object and nothing else.'
+/** `recent` when there is no earlier conversation. */
+export const NO_RECENT = '（无）'
+
+export const STAGE_QUESTION = 'stage'
+export const STAGE_INSTRUCTIONS = '判断这条开发者消息接下来应处于哪个工作阶段'
 
 export function clip(text: string, limit = SEGMENT_LIMIT): string {
   const trimmed = text.trim()
@@ -43,114 +54,50 @@ function textOf(message: Pick<Message, 'content'>): string {
  * after it; tool traffic and notices are skipped.
  */
 export function summarizeRecent(history: readonly Message[], turns: number): string {
-  if (turns <= 0) return '(none)'
+  if (turns <= 0) return NO_RECENT
   const lines: string[][] = []
   for (const message of history) {
     if (message.role === 'user' && message.source.kind === 'user') {
-      lines.push([`User: ${clip(textOf(message))}`])
+      lines.push([`用户：${clip(textOf(message))}`])
     } else if (message.role === 'assistant' && lines.length > 0) {
       const text = textOf(message)
-      if (text.trim() !== '') lines.at(-1)!.push(`Assistant: ${clip(text)}`)
+      if (text.trim() !== '') lines.at(-1)!.push(`助手：${clip(text)}`)
     }
   }
   const recent = lines.slice(-turns).flat()
-  return recent.length === 0 ? '(none)' : recent.join('\n')
-}
-
-export function renderPrompt(template: string | null, input: JudgeInput): string {
-  const vars: Record<string, string> = {
-    current: input.current ?? 'none',
-    candidates: input.candidates.map(c => `- ${c.id}: ${c.description || '(no description)'}`).join('\n'),
-    recent: input.recent,
-    message: clip(input.message, SEGMENT_LIMIT * 2),
-  }
-  return (template ?? DEFAULT_JUDGE_TEMPLATE).replace(/\{\{\s*(\w+)\s*\}\}/g, (whole, key: string) => vars[key] ?? whole)
-}
-
-/** First balanced `{…}` object in `text`, ignoring braces inside strings. */
-export function firstObject(text: string): string | undefined {
-  const start = text.indexOf('{')
-  if (start < 0) return undefined
-  let depth = 0
-  let inString = false
-  for (let i = start; i < text.length; i++) {
-    const ch = text[i]
-    if (inString) {
-      if (ch === '\\') i++
-      else if (ch === '"') inString = false
-    } else if (ch === '"') inString = true
-    else if (ch === '{') depth++
-    else if (ch === '}' && --depth === 0) return text.slice(start, i + 1)
-  }
-  return undefined
-}
-
-/** Tolerant parse of the judge's reply: code fences, surrounding prose, string numbers. */
-export function parseJudgement(text: string): Judgement {
-  const raw = firstObject(text)
-  if (raw === undefined) return { ok: false, error: '回复里没有 JSON 对象' }
-  let value: unknown
-  try {
-    value = JSON.parse(raw)
-  } catch {
-    return { ok: false, error: 'JSON 格式有误' }
-  }
-  if (typeof value !== 'object' || value === null) return { ok: false, error: '回复不是 JSON 对象' }
-  const { stage, confidence, reason } = value as Record<string, unknown>
-  if (typeof stage !== 'string' || stage.trim() === '') return { ok: false, error: '缺少 "stage" 字段' }
-  const score = typeof confidence === 'string' ? Number(confidence) : confidence
-  if (typeof score !== 'number' || Number.isNaN(score)) return { ok: false, error: '缺少 "confidence" 字段' }
-  return {
-    ok: true,
-    stage: stage.trim(),
-    confidence: Math.min(1, Math.max(0, score)),
-    reason: typeof reason === 'string' ? reason : '',
-  }
+  return recent.length === 0 ? NO_RECENT : recent.join('\n')
 }
 
 /**
- * Ask the judge model. Never throws: timeouts, provider errors and bad replies
- * come back as `{ ok: false }`. The call carries no `sessionId`, so it never
- * enters a session log.
+ * Ask Jev which candidate stage the new message belongs to: one `choice`
+ * question whose options are the candidate stages and their descriptions.
+ * Never throws; failures come back as `{ ok: false }`.
  */
 export async function runJudge(
-  stream: StreamFn,
-  config: JudgeConfig,
+  fetchFn: FetchFn,
+  jev: JevConfig,
   input: JudgeInput,
   signal?: AbortSignal,
 ): Promise<TimedJudgement> {
-  const started = Date.now()
-  const timeout = AbortSignal.timeout(config.timeoutMs)
-  const combined = signal === undefined ? timeout : AbortSignal.any([signal, timeout])
-  const done = (result: Judgement): TimedJudgement => ({ ...result, elapsedMs: Date.now() - started })
-  const options: GenerateOptions = {
-    provider: config.route.provider,
-    model: config.route.model,
-    ...config.route.reasoningEffort === undefined ? {} : { reasoningEffort: config.route.reasoningEffort as ReasoningEffortId },
-    system: JUDGE_SYSTEM,
-    messages: [createUserMessage({
-      content: [{ type: 'text', text: renderPrompt(config.promptTemplate, input) }],
-      source: { kind: 'user' },
-    })],
-    maxTokens: 400,
-    temperature: 0,
-    signal: combined,
-  }
-  try {
-    const assembler = new BlockAssembler()
-    for await (const chunk of stream(options)) {
-      if (combined.aborted) break
-      assembler.push(chunk)
-    }
-    if (timeout.aborted) return done({ ok: false, error: `超时（${config.timeoutMs} 毫秒）` })
-    if (combined.aborted) return done({ ok: false, error: '已取消' })
-    const finish = assembler.finish
-    if (finish.kind === 'error') return done({ ok: false, error: `模型服务出错：${finish.failure.message}` })
-    const text = assembler.blocks().flatMap(block => block.type === 'text' ? [block.text] : []).join('')
-    return done(parseJudgement(text))
-  } catch (error) {
-    if (timeout.aborted) return done({ ok: false, error: `超时（${config.timeoutMs} 毫秒）` })
-    return done({ ok: false, error: error instanceof Error ? error.message : String(error) })
+  const criteria = Object.fromEntries(input.candidates.map(c => [c.id, c.description.trim() || c.id]))
+  const current = input.current === null
+    ? '（会话第一条消息）'
+    : input.currentDescription ? `${input.current}：${input.currentDescription}` : input.current
+  const result = await askJev(fetchFn, jev, {
+    prompt: clip(input.message, MESSAGE_LIMIT),
+    current,
+    recent: input.recent,
+  }, { [STAGE_QUESTION]: { type: 'choice', instructions: STAGE_INSTRUCTIONS, criteria } }, signal)
+  if (!result.ok) return { ok: false, error: result.error, elapsedMs: result.elapsedMs }
+  const answer = result.answers[STAGE_QUESTION]
+  if (answer === undefined) return { ok: false, error: 'Jev 没有给出阶段选择', elapsedMs: result.elapsedMs }
+  return {
+    ok: true,
+    stage: answer.choice,
+    confidence: answer.confidence,
+    reason: '',
+    elapsedMs: result.elapsedMs,
+    probabilities: answer.probabilities,
   }
 }
 

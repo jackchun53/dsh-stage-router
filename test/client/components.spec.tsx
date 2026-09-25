@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { INITIAL_STATE } from '../../src/engine/state.js'
 import { zh } from '../../src/client/locales.js'
 import { StageChip, chipLabel } from '../../src/client/StageChip.js'
 import { TurnTail, changedTurn } from '../../src/client/TurnTail.js'
-import type { StageRouterState } from '../../src/shared/wire.js'
+import type { JudgeLogEntry, StageRouterState } from '../../src/shared/wire.js'
 
 afterEach(cleanup)
 
@@ -29,8 +29,21 @@ type RunStage = (args: string) => Promise<string | null>
 type ChipProps = Parameters<typeof StageChip>[0]
 type TailProps = Parameters<typeof TurnTail>[0]
 
-function chipProps(state: StageRouterState | undefined, runStage = vi.fn<RunStage>(async () => null)): ChipProps {
-  return { useProjection: () => state, runStage, t } as unknown as ChipProps
+const log: JudgeLogEntry[] = [
+  {
+    kind: 'stage', at: Date.now() - 120_000, elapsedMs: 310, message: '先把接口定下来', from: 'code', candidates: ['plan', 'code', 'review'],
+    ok: true, choice: 'plan', confidence: 0.45, probabilities: { plan: 0.45, code: 0.4, review: 0.15 }, to: 'code', reason: 'Jev 置信度 45% 低于 60%',
+  },
+  { kind: 'tier', at: Date.now() - 60_000, elapsedMs: 200, stage: 'code', ok: true, tasks: [{ text: '[T1] small fix', tier: 'light', confidence: 0.9 }] },
+  {
+    kind: 'stage', at: Date.now(), elapsedMs: 280, message: '写实现', from: 'code', candidates: ['plan', 'code', 'review'],
+    ok: true, choice: 'review', confidence: 0.82, probabilities: { plan: 0.08, code: 0.1, review: 0.82 }, to: 'review', reason: 'Jev 判断（置信度 82%）',
+  },
+  { kind: 'stage', at: Date.now(), elapsedMs: 3000, message: '超时的那条', from: 'review', candidates: ['plan', 'code'], ok: false, error: 'Jev 超时（3000 毫秒）', to: 'review', reason: '判断失败' },
+]
+
+function chipProps(state: StageRouterState | undefined, runStage = vi.fn<RunStage>(async () => null), judgeLog = vi.fn(async () => log)): ChipProps {
+  return { useProjection: () => state, runStage, judgeLog, t } as unknown as ChipProps
 }
 
 describe('StageChip', () => {
@@ -44,16 +57,18 @@ describe('StageChip', () => {
   it('shows stage, tier and model', () => {
     expect(chipLabel(routed)).toBe('编码 · heavy · deepseek-v4-pro@high')
     render(<StageChip {...chipProps(routed)} />)
-    expect(screen.getByRole('button').textContent).toBe('编码 · heavy · deepseek-v4-pro@high')
+    const chip = screen.getByRole('button')
+    expect(chip.textContent).toBe('编码heavy · deepseek-v4-pro@high')
+    expect(chip.getAttribute('aria-label')).toBe('阶段路由：编码 · heavy · deepseek-v4-pro@high，点击查看详情')
   })
 
-  it('opens a panel with the last judgement and locks a stage via /stage', async () => {
+  it('opens a panel with the reason and locks a stage via /stage', async () => {
     const runStage = vi.fn<RunStage>(async () => null)
     render(<StageChip {...chipProps(routed, runStage)} />)
     fireEvent.click(screen.getByRole('button'))
     const panel = screen.getByRole('dialog')
-    expect(panel.textContent).toContain('code，置信度 0.82')
     expect(panel.textContent).toContain('judge: writes code')
+    expect(panel.textContent).toContain('deepseek-official/deepseek-v4-pro@high')
     fireEvent.click(screen.getByRole('button', { name: '审查' }))
     expect(runStage).toHaveBeenCalledWith('review')
     await vi.waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
@@ -62,11 +77,45 @@ describe('StageChip', () => {
   it('offers unlock when locked and shows a failed action', async () => {
     const runStage = vi.fn<RunStage>(async () => 'Unknown stage')
     render(<StageChip {...chipProps({ ...routed, lock: 'code' }, runStage)} />)
-    expect(screen.getByRole('button').textContent).toContain('已锁定')
+    expect(screen.getByLabelText('已锁定')).toBeTruthy()
     fireEvent.click(screen.getByRole('button'))
     fireEvent.click(screen.getByRole('button', { name: '恢复自动' }))
     expect(runStage).toHaveBeenCalledWith('auto')
     await screen.findByText('操作失败：Unknown stage')
+  })
+})
+
+describe('judge log', () => {
+  it('lists the session judgements newest first and expands one to its probabilities', async () => {
+    const judgeLog = vi.fn(async () => log)
+    render(<StageChip {...chipProps(routed, undefined, judgeLog)} />)
+    fireEvent.click(screen.getByRole('button'))
+    const section = await screen.findByRole('region', { name: '判断日志' })
+    const items = await within(section).findAllByRole('button', { expanded: false })
+    expect(items.map(item => item.textContent)).toEqual([
+      '刚刚判断失败3000 ms超时的那条',
+      '刚刚→ 审查82% · 280 ms写实现',
+      '1 分钟前定档 T1→light200 ms编码',
+      '2 分钟前留在 编码45% · 310 ms先把接口定下来',
+    ])
+    fireEvent.click(items[3]!)
+    expect(within(section).getAllByRole('meter').map(m => m.getAttribute('aria-label'))).toEqual(['规划', '编码', '审查'])
+    expect(within(section).getByText('Jev 置信度 45% 低于 60%')).toBeTruthy()
+    fireEvent.click(items[0]!)
+    expect(within(section).getByText('Jev 超时（3000 毫秒）')).toBeTruthy()
+    expect(judgeLog).toHaveBeenCalledTimes(1)
+    fireEvent.click(within(section).getByRole('button', { name: '刷新' }))
+    await vi.waitFor(() => expect(judgeLog).toHaveBeenCalledTimes(2))
+  })
+
+  it('shows an empty log and a failed read', async () => {
+    const { unmount } = render(<StageChip {...chipProps(routed, undefined, vi.fn(async () => []))} />)
+    fireEvent.click(screen.getByRole('button'))
+    await screen.findByText('本会话还没有判断记录')
+    unmount()
+    render(<StageChip {...chipProps(routed, undefined, vi.fn(async () => { throw new Error('offline') }))} />)
+    fireEvent.click(screen.getByRole('button'))
+    await screen.findByText('读取判断日志失败：offline')
   })
 })
 

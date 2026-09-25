@@ -19,6 +19,8 @@ export type Judgement =
   | { ok: true; stage: string; confidence: number; reason: string }
   | { ok: false; error: string }
 
+const percent = (value: number) => `${Math.round(value * 100)}%`
+
 function move(state: MachineState, stage: string, reason: string): Decision {
   return stage === state.stage ? { kind: 'stay', reason } : { kind: 'goto', stage, reason }
 }
@@ -82,9 +84,9 @@ export function applyJudgement(
     ? { kind: 'goto', stage: initialStage, reason: `会话第一条消息，进入初始阶段（${reason}）` }
     : { kind: 'stay', reason }
   if (!judgement.ok) return fallback(`判断失败：${judgement.error}`)
-  if (!candidates.includes(judgement.stage)) return fallback(`判断器选了候选之外的阶段「${judgement.stage}」`)
+  if (!candidates.includes(judgement.stage)) return fallback(`Jev 选了候选之外的阶段「${judgement.stage}」`)
   if (judgement.confidence < minConfidence) {
-    return fallback(`置信度 ${judgement.confidence} 低于 ${minConfidence}`)
+    return fallback(`Jev 置信度 ${percent(judgement.confidence)} 低于 ${percent(minConfidence)}`)
   }
-  return move(state, judgement.stage, `判断器：${judgement.reason || '（未给出原因）'}`)
+  return move(state, judgement.stage, `Jev 判断（置信度 ${percent(judgement.confidence)}）`)
 }

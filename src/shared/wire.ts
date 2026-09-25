@@ -19,6 +19,43 @@ export interface JudgeRecord {
   elapsedMs: number
 }
 
+/** One Jev stage judgement, as shown in the stage panel's judge log. */
+export interface StageJudgeLog {
+  kind: 'stage'
+  at: number
+  elapsedMs: number
+  /** The user message, clipped. */
+  message: string
+  /** Stage before the message; `null` for the session's first message. */
+  from: string | null
+  candidates: string[]
+  ok: boolean
+  choice?: string
+  confidence?: number
+  /** Jev's probability per candidate stage. */
+  probabilities?: Record<string, number>
+  error?: string
+  /** Stage after the decision (`null` only if the session had none). */
+  to: string | null
+  reason: string
+}
+
+/** One Jev tier batch for a stage's todos or a subagent task. */
+export interface TierJudgeLog {
+  kind: 'tier'
+  at: number
+  elapsedMs: number
+  stage: string
+  ok: boolean
+  error?: string
+  tasks: { text: string; tier: string | null; confidence: number | null }[]
+}
+
+export type JudgeLogEntry = StageJudgeLog | TierJudgeLog
+
+/** Judge log entries kept per session (newest last). */
+export const JUDGE_LOG_LIMIT = 50
+
 export interface StageRef {
   id: string
   name: string

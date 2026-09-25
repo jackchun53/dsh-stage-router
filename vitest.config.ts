@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config'
+import { fileURLToPath } from 'node:url'
 
 export default defineConfig({
   esbuild: { jsx: 'automatic' },
@@ -14,6 +15,8 @@ export default defineConfig({
       },
       {
         esbuild: { jsx: 'automatic' },
+        // The host supplies the primitives at runtime; their dependencies are not installed here.
+        resolve: { alias: { '@deepseek-ai/dsh-client-ui-primitives': fileURLToPath(new URL('./test/client/primitives-stub.tsx', import.meta.url)) } },
         test: {
           name: 'client',
           include: ['test/client/**/*.spec.{ts,tsx}'],

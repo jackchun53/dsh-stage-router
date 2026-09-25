@@ -12,19 +12,21 @@ const require = createRequire(import.meta.url)
 
 export async function boot() {
   const { chromium } = require(process.env.PLAYWRIGHT_MODULE ?? 'playwright')
-  const dsh = join(root, 'node_modules/.bin/dsh')
+  // dsh's JS entry run with this Node: the .bin shim is not executable on Windows.
+  const dsh = join(root, 'node_modules/@deepseek-ai/dsh/lib/bin.js')
   const home = mkdtempSync(join(tmpdir(), 'stage-router-web-'))
   mkdirSync(join(home, 'user'))
   const env = {
     ...process.env, HOME: join(home, 'user'), DSH_HOME: join(home, 'home'), DSH_AGENTS_HOME: join(home, 'agents'),
     DSH_TELEMETRY_DISABLED: '1', DSH_PERMISSION_MODE: 'danger-full-access', FAKE_LLM_LOG: join(home, 'llm.jsonl'),
   }
-  const add = spawnSync(dsh, ['plugin', '--profile', 'web', 'add', root], { env, encoding: 'utf8' })
+  const add = spawnSync(process.execPath, [dsh, 'plugin', '--profile', 'web', 'add', root], { env, encoding: 'utf8' })
   if (add.status !== 0) throw new Error(`plugin add failed:\n${add.stderr}`)
 
   // User layer: fake provider, test scheme as the default model.
-  const fixture = readFileSync(join(root, 'test/integration/fixtures/profile.patch.yml'), 'utf8')
-  const schemeConfig = fixture.slice(fixture.indexOf('      config:\n        defaultJudge:')).replace(/^ {6}/gm, '  ')
+  // CRLF checkouts (Windows) would defeat the '\n' anchors below.
+  const fixture = readFileSync(join(root, 'test/integration/fixtures/profile.patch.yml'), 'utf8').replace(/\r\n/g, '\n')
+  const schemeConfig = fixture.slice(fixture.indexOf('      config:\n        jev:')).replace(/^ {6}/gm, '  ')
   const patchPath = join(env.DSH_HOME, 'profiles/web/cordis.patch.yml')
   writeFileSync(patchPath, `- id: agent-default-model
   config: { provider: stage-router, model: test }
@@ -40,7 +42,7 @@ export async function boot() {
 - id: stage-router
 ${schemeConfig}`)
 
-  const server = spawn(dsh, ['--profile', 'web', '--no-open', '--port', '0'], { env, cwd: home })
+  const server = spawn(process.execPath, [dsh, '--profile', 'web', '--no-open', '--port', '0'], { env, cwd: home })
   let output = ''
   const url = await new Promise((resolveUrl, reject) => {
     const timer = setTimeout(() => reject(new Error(`dsh web did not start:\n${output}`)), 120_000)
@@ -81,7 +83,9 @@ export async function onboard(page) {
   const choose = page.getByText(/^(Choose workspace|选择工作区)$/).first()
   if (await choose.isVisible().catch(() => false)) {
     await choose.click()
-    await page.getByRole('button', { name: /^(Open|打开)$/ }).click()
+    // Newer hosts start in a default workspace and open no picker.
+    const open = page.getByRole('button', { name: /^(Open|打开)$/ })
+    await open.waitFor({ timeout: 5_000 }).then(() => open.click(), () => page.keyboard.press('Escape'))
   }
 }
 

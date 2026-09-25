@@ -13,7 +13,7 @@ describe('stage routing in a headless session', () => {
     for (const prompt of [
       'JUDGE=review hello',              // 0: judge picks review
       'JUDGE=review@0.3 still there?',  // 1: low confidence → stay (review survives reload)
-      'JUDGE=garbage anything',          // 2: unparsable judge reply → stay
+      'JUDGE=garbage anything',          // 2: malformed Jev reply → stay
       'JUDGE=code TODO finish it',       // 3: code, then todos_done → review mid-turn
       'JUDGE=plan EXITPLAN plan it',     // 4: plan (+ plan mode), approval → code
       'JUDGE=slow hello',                // 5: judge timeout → stay
@@ -39,10 +39,10 @@ describe('stage routing in a headless session', () => {
     expect(session.sessionId).toBeDefined()
   })
 
-  it('routes the first message by the judge, without a session id on the judge call', () => {
+  it('routes the first message by Jev', () => {
     const [first] = turns
     expect(judges(first!)).toHaveLength(1)
-    expect(judges(first!)[0]).toMatchObject({ provider: 'fake', model: 'm-judge', reasoningEffort: 'off' })
+    expect(judges(first!)[0]).toMatchObject({ provider: 'jev', model: 'jev-test', auth: 'Bearer test-token', questions: ['stage'] })
     expect(routes(first!)).toEqual(['fake/m-review@high'])
     expect(first!.final).toBe('reply from fake/m-review')
   })

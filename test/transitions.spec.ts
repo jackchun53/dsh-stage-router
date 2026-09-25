@@ -74,7 +74,7 @@ describe('applyJudgement', () => {
   const ok = (stage: string, confidence = 0.9) => ({ ok: true as const, stage, confidence, reason: 'r' })
 
   it('moves to a confident candidate', () => {
-    expect(applyJudgement(at('code'), ok('plan'), candidates, 0.6, 'code')).toEqual({ kind: 'goto', stage: 'plan', reason: '判断器：r' })
+    expect(applyJudgement(at('code'), ok('plan'), candidates, 0.6, 'code')).toEqual({ kind: 'goto', stage: 'plan', reason: 'Jev 判断（置信度 90%）' })
   })
 
   it('stays on failure, low confidence or a non-candidate answer', () => {

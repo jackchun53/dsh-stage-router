@@ -4,9 +4,9 @@
  * index.ts; this module is unit-tested on its own.
  */
 import type { RouteConfig, StageRouterConfig } from './config/schema.js'
-import { effectiveJudge, parseConfig } from './config/schema.js'
+import { jevConfigured, parseConfig } from './config/schema.js'
 import { checkRoutes, schemeRoutes, validateConfig, type ConfigIssue } from './config/validate.js'
-import { runJudge, type StreamFn, type TimedJudgement } from './engine/judge.js'
+import { NO_RECENT, runJudge, type FetchFn, type TimedJudgement } from './engine/judge.js'
 import { applyJudgement, decide, type Decision } from './engine/transitions.js'
 
 export interface DraftCheck {
@@ -41,11 +41,13 @@ export async function checkDraft(input: unknown, usable?: (route: RouteConfig) =
   if (usable !== undefined) {
     for (const [index, scheme] of config.schemes.entries()) {
       const routes = schemeRoutes(scheme, `schemes[${index}]`).filter(({ route }) => route.provider !== '' && route.model !== '')
-      issues.push(...await checkRoutes(routes, async route =>
-        (await usable(route)) ? undefined : `模型 ${route.provider}/${route.model} 当前不可用`))
+      const unavailable = await checkRoutes(routes, async route =>
+        (await usable(route)) ? undefined : `模型 ${route.provider}/${route.model} 当前不可用`)
+      issues.push(...unavailable.map(issue => ({ ...issue, severity: 'warning' as const })))
     }
-    const judge = config.defaultJudge.route
-    if (!(await usable(judge))) issues.push({ path: 'defaultJudge.route', message: `模型 ${judge.provider}/${judge.model} 当前不可用` })
+  }
+  if (!jevConfigured(config.jev)) {
+    issues.push({ path: 'jev', message: 'Jev 未配置（需要地址和 token），阶段和档位的判断不会生效', severity: 'warning' })
   }
   return { config, issues }
 }
@@ -68,8 +70,8 @@ export interface TryJudgeResult {
   issues: ConfigIssue[]
 }
 
-/** Run the draft scheme's `user_message` rules and, when needed, its judge on one message. */
-export async function tryJudge(stream: StreamFn, input: TryJudgeInput): Promise<TryJudgeResult> {
+/** Run the draft scheme's `user_message` rules and, when needed, Jev on one message. */
+export async function tryJudge(fetchFn: FetchFn, input: TryJudgeInput): Promise<TryJudgeResult> {
   const { config, issues } = await checkDraft(input.draft)
   const scheme = config?.schemes.find(s => s.id === input.scheme)
   if (config === undefined || scheme === undefined) {
@@ -85,18 +87,21 @@ export async function tryJudge(stream: StreamFn, input: TryJudgeInput): Promise<
   if (decision.kind !== 'judge') {
     return { candidates: decision.kind === 'goto' ? [decision.stage] : [], decision, issues }
   }
-  const judgeConfig = effectiveJudge(config.defaultJudge, scheme)
   const byId = new Map(scheme.stages.map(stage => [stage.id, stage]))
-  const judgement = await runJudge(stream, judgeConfig, {
+  const judgement = await runJudge(fetchFn, config.jev, {
     current,
+    ...current === null ? {} : { currentDescription: byId.get(current)?.description ?? '' },
     candidates: decision.candidates.map(id => ({ id, description: byId.get(id)?.description ?? '' })),
-    recent: input.recent?.trim() || '(none)',
+    recent: input.recent?.trim() || NO_RECENT,
     message: input.message,
   })
   return {
     candidates: decision.candidates,
     judgement,
-    decision: applyJudgement(state, judgement, decision.candidates, judgeConfig.minConfidence, scheme.initialStage),
+    decision: applyJudgement(state, judgement, decision.candidates, config.jev.minConfidence, scheme.initialStage),
     issues,
   }
 }
+
+/** Issues that block saving (everything except warnings). */
+export const blocking = (issues: readonly ConfigIssue[]) => issues.filter(issue => issue.severity !== 'warning')

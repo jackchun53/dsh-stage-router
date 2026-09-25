@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_JUDGE, parseConfig, type RouteConfig } from '../src/config/schema.js'
+import { DEFAULT_JEV, parseConfig, type RouteConfig } from '../src/config/schema.js'
 import { EXAMPLE_SCHEME } from '../src/config/defaults.js'
 import { SessionRouter, type RouterDeps } from '../src/engine/session-router.js'
 import { INITIAL_STATE, foldStageState, type StageRouterState } from '../src/engine/state.js'
 import type { TimedJudgement } from '../src/engine/judge.js'
+import type { JudgeLogEntry } from '../src/engine/judge-log.js'
 
 const scheme = parseConfig({ schemes: [EXAMPLE_SCHEME] }).schemes[0]!
 const flash = { provider: 'deepseek-official', model: 'deepseek-flash' }
@@ -12,19 +13,21 @@ const pro = (effort: string) => ({ provider: 'deepseek-official', model: 'deepse
 function deps(options: { verdict?: TimedJudgement; unusable?: string[]; fallback?: RouteConfig; tiers?: RouterDeps['tiers'] } = {}) {
   const logs: string[] = []
   const judged: string[] = []
+  const recorded: JudgeLogEntry[] = []
   const d: RouterDeps = {
     judge: async (input, _config, messageId) => {
       judged.push(`${messageId}:${input.candidates.map(c => c.id).join(',')}`)
       return options.verdict ?? { ok: false, error: 'no verdict', elapsedMs: 1 }
     },
-    judgeConfig: () => DEFAULT_JUDGE,
+    jev: () => DEFAULT_JEV,
+    record: entry => { recorded.push(entry) },
     usable: async route => !(options.unusable ?? []).includes(route.model),
     defaultRoute: () => options.fallback,
     log: (level, message) => { logs.push(`${level}:${message}`) },
     tiers: options.tiers ?? { classify: () => {}, lookup: () => undefined },
     tierWaitMs: 20,
   }
-  return { d, logs, judged }
+  return { d, logs, judged, recorded }
 }
 
 const turn = (id: string) => ({ messageId: id, text: 'msg', recent: '(none)' })
@@ -47,6 +50,21 @@ describe('SessionRouter', () => {
     const router = new SessionRouter(scheme, INITIAL_STATE, d)
     expect(await router.onUserMessage(turn('m1'))).toEqual({ planMode: true })
     expect(await router.resolveRoute()).toEqual(pro('max'))
+  })
+
+  it('writes one judge-log entry per judged message with the outcome', async () => {
+    const { d, recorded } = deps({ verdict: { ...verdict('plan', 0.8), probabilities: { plan: 0.8, code: 0.2 } } })
+    const router = new SessionRouter(scheme, INITIAL_STATE, d)
+    await router.onUserMessage({ messageId: 'm1', text: '  let us\n plan  ', recent: '' })
+    await router.onUserMessage({ messageId: 'm1', text: 'retry of the same step', recent: '' })
+    expect(recorded).toEqual([expect.objectContaining({
+      kind: 'stage', message: 'let us plan', from: null, candidates: ['plan', 'code', 'review'],
+      ok: true, choice: 'plan', confidence: 0.8, probabilities: { plan: 0.8, code: 0.2 }, to: 'plan', reason: 'Jev 判断（置信度 80%）',
+    })])
+    const low = deps({ verdict: verdict('review', 0.3) })
+    const staying = new SessionRouter(scheme, { ...INITIAL_STATE, scheme: scheme.id, stage: 'code', route: flash, notices: 1 }, low.d)
+    await staying.onUserMessage(turn('m2'))
+    expect(low.recorded[0]).toMatchObject({ from: 'code', to: 'code', choice: 'review', reason: 'Jev 置信度 30% 低于 60%' })
   })
 
   it('resumes from the persisted projection and stays on a failed judgement', async () => {

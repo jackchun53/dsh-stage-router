@@ -1,9 +1,12 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Pill, Tag } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import './projection.js'
-import { modelLabel, type StageRouterState } from '../shared/wire.js'
+import { modelLabel, type JudgeLogEntry, type StageRouterState } from '../shared/wire.js'
+import { IconButton, Probabilities, icons, percent } from './parts.js'
+import { useStageRouterStyles } from './styles.js'
 
 /** Business face injected per session by the client entry. */
 export interface StageChipInjected {
@@ -12,10 +15,14 @@ export interface StageChipInjected {
    * @returns null when admitted; a user-visible failure line otherwise.
    */
   runStage: (args: string) => Promise<string | null>
+  /** This session's recent Jev calls, newest last. */
+  judgeLog: () => Promise<JudgeLogEntry[]>
 }
 
 export type StageChipProps =
   PropsRuntime<'conversation.input.right'> & InjectFace<StageChipInjected> & PropsLocale<'stage-router'>
+
+type Translate = StageChipProps['t']
 
 /** True when the session is routed by a stage-router scheme and has a stage. */
 export function isRouted(state: StageRouterState | undefined): state is StageRouterState & { stage: string } {
@@ -27,28 +34,22 @@ export function chipLabel(state: StageRouterState): string {
   return [state.stageName ?? state.stage, state.tier, modelLabel(state.route)].filter(part => part != null && part !== '').join(' · ')
 }
 
-const chip: CSSProperties = {
-  display: 'inline-flex', alignItems: 'center', gap: 4, height: 28, padding: '0 8px', maxWidth: 260,
-  border: '1px solid var(--dsw-color-border, rgba(127,127,127,.35))', borderRadius: 'var(--dsw-radius-sm, 6px)',
-  background: 'transparent', color: 'inherit', font: 'inherit', fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap',
-  overflow: 'hidden', textOverflow: 'ellipsis',
+/** `HH:MM` for older entries, "刚刚" / "N 分钟前" for recent ones. */
+function when(at: number, now: number, t: Translate): string {
+  const minutes = Math.floor((now - at) / 60_000)
+  if (minutes < 1) return t('log.justNow')
+  if (minutes < 60) return t('log.minutesAgo', { count: minutes })
+  const date = new Date(at)
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
 }
-const panel: CSSProperties = {
-  position: 'absolute', right: 0, bottom: 'calc(100% + 6px)', zIndex: 50, minWidth: 260, maxWidth: 360, padding: 12,
-  border: '1px solid var(--dsw-color-border, rgba(127,127,127,.35))', borderRadius: 'var(--dsw-radius-md, 8px)',
-  background: 'var(--dsw-color-surface-raised, var(--dsw-color-bg, #fff))', color: 'inherit', fontSize: 12,
-  boxShadow: '0 6px 24px rgba(0,0,0,.18)', display: 'grid', gap: 6,
-}
-const row: CSSProperties = { display: 'flex', gap: 8, justifyContent: 'space-between' }
-const muted: CSSProperties = { opacity: 0.7 }
-const actionButton: CSSProperties = { ...chip, height: 24, padding: '0 6px' }
 
 /**
  * Composer chip for sessions routed by stage-router: current stage, tier and
- * model; the panel shows the last decision and locks or unlocks the stage via
- * `/stage`. Renders nothing for other sessions.
+ * model. The panel shows why, locks or unlocks the stage via `/stage`, and
+ * lists this session's Jev judgements. Renders nothing for other sessions.
  */
-export function StageChip({ useProjection, runStage, t }: StageChipProps) {
+export function StageChip({ useProjection, runStage, judgeLog, t }: StageChipProps) {
+  useStageRouterStyles()
   const state = useProjection('stage-router')
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -73,6 +74,7 @@ export function StageChip({ useProjection, runStage, t }: StageChipProps) {
 
   if (!isRouted(state)) return null
   const label = chipLabel(state)
+  const detail = [state.tier, modelLabel(state.route)].filter(part => part != null && part !== '').join(' · ')
 
   const run = (args: string) => {
     setBusy(true)
@@ -89,55 +91,157 @@ export function StageChip({ useProjection, runStage, t }: StageChipProps) {
     })
   }
 
-  const judge = state.judge
-  const judgeText = judge === null
-    ? t('panel.judge.none')
-    : judge.ok
-      ? t('panel.judge.ok', { stage: judge.stage ?? '?', confidence: judge.confidence?.toFixed(2) ?? '?' })
-      : t('panel.judge.failed', { error: judge.error ?? '?' })
+  const name = (id: string | null) => id === null ? '—' : state.stages.find(stage => stage.id === id)?.name || id
 
   return (
-    <span ref={rootRef} style={{ position: 'relative', display: 'inline-flex' }}>
-      <button
-        type="button"
-        style={chip}
+    <span ref={rootRef} className="sr-chip-root">
+      <Pill
+        active={open}
+        className="sr-chip"
         aria-label={t('chip.aria', { label })}
         aria-expanded={open}
         title={label}
         onClick={() => setOpen(value => !value)}
       >
-        {label}
-        {state.lock !== null && <span style={muted}>· {t('chip.locked')}</span>}
-      </button>
+        <span className="sr-chip-stage">{state.stageName ?? state.stage}</span>
+        {detail !== '' && <span className="sr-chip-detail">{detail}</span>}
+        {state.lock !== null && <span className="sr-chip-lock" aria-label={t('chip.locked')} title={t('chip.locked')}>{icons.lock}</span>}
+      </Pill>
       {open && (
-        <div role="dialog" aria-label={t('panel.title')} style={panel}>
-          <strong>{t('panel.title')}</strong>
-          <div style={row}><span style={muted}>{t('panel.stage')}</span><span>{state.stageName ?? state.stage}{state.lock !== null ? ` · ${t('chip.locked')}` : ''}</span></div>
-          {state.tier !== null && <div style={row}><span style={muted}>{t('panel.tier')}</span><span>{state.tier}</span></div>}
-          <div style={row}><span style={muted}>{t('panel.model')}</span><span>{state.route === null ? '—' : `${state.route.provider}/${modelLabel(state.route)}`}</span></div>
-          {state.reason !== null && <div style={row}><span style={muted}>{t('panel.reason')}</span><span>{state.reason}</span></div>}
-          <div style={row}><span style={muted}>{t('panel.judge')}</span><span>{judgeText}</span></div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
-            <span style={muted}>{t('panel.lock')}</span>
-            {state.stages.map(stage => (
-              <button
-                key={stage.id}
-                type="button"
-                style={{ ...actionButton, fontWeight: stage.id === state.lock ? 600 : 400 }}
-                disabled={busy || stage.id === state.lock}
-                onClick={() => run(stage.id)}
-              >
-                {stage.name}
-              </button>
-            ))}
-            {state.lock !== null && (
-              <button type="button" style={actionButton} disabled={busy} onClick={() => run('auto')}>{t('panel.unlock')}</button>
-            )}
+        <div role="dialog" aria-label={t('panel.title')} className="sr-pop">
+          <div className="sr-pop-head">
+            <span className="sr-pop-title">{t('panel.title')}</span>
+            {state.lock !== null && <Tag tone="warning">{t('chip.locked')}</Tag>}
           </div>
-          {busy && <span style={muted}>{t('panel.busy')}</span>}
-          {error !== null && <span role="status">{t('panel.failed', { error })}</span>}
+          <dl className="sr-kv">
+            <dt>{t('panel.stage')}</dt><dd>{state.stageName ?? state.stage}</dd>
+            {state.tier !== null && <><dt>{t('panel.tier')}</dt><dd>{state.tier}</dd></>}
+            <dt>{t('panel.model')}</dt><dd>{state.route === null ? '—' : `${state.route.provider}/${modelLabel(state.route)}`}</dd>
+            {state.reason !== null && <><dt>{t('panel.reason')}</dt><dd>{state.reason}</dd></>}
+          </dl>
+          <div className="sr-section">
+            <div className="sr-section-head"><span>{t('panel.lock')}</span></div>
+            <div className="sr-pills">
+              {state.stages.map(stage => (
+                <Pill key={stage.id} active={stage.id === state.lock} disabled={busy || stage.id === state.lock} onClick={() => run(stage.id)}>
+                  {stage.name}
+                </Pill>
+              ))}
+              {state.lock !== null && <Pill disabled={busy} onClick={() => run('auto')}>{t('panel.unlock')}</Pill>}
+            </div>
+            {busy && <span className="sr-hint">{t('panel.busy')}</span>}
+            {error !== null && <span role="status" className="sr-error">{t('panel.failed', { error })}</span>}
+          </div>
+          <JudgeLogSection load={judgeLog} refreshKey={`${state.notices}:${state.turns.at(-1)?.turn ?? 0}`} name={name} t={t} />
         </div>
       )}
     </span>
+  )
+}
+
+/** The session's Jev calls, newest first; each stage entry expands to Jev's probabilities. */
+function JudgeLogSection({ load, refreshKey, name, t }: {
+  load: () => Promise<JudgeLogEntry[]>
+  /** Changes when the session routed again, to pull fresh entries. */
+  refreshKey: string
+  name: (id: string | null) => string
+  t: Translate
+}) {
+  const [entries, setEntries] = useState<JudgeLogEntry[] | null>(null)
+  const [failure, setFailure] = useState<string | null>(null)
+  const [expanded, setExpanded] = useState<number | null>(null)
+  const ticket = useRef(0)
+
+  const refresh = useCallback(() => {
+    const mine = ++ticket.current
+    load().then(value => {
+      if (mine !== ticket.current) return
+      setEntries([...value].reverse())
+      setFailure(null)
+    }, (reason: unknown) => {
+      if (mine === ticket.current) setFailure(reason instanceof Error ? reason.message : String(reason))
+    })
+  }, [load])
+
+  useEffect(() => { refresh() }, [refresh, refreshKey])
+  useEffect(() => () => { ticket.current++ }, [])
+
+  const now = Date.now()
+  return (
+    <section className="sr-section" aria-label={t('log.title')}>
+      <div className="sr-section-head">
+        <span>{t('log.title')}</span>
+        <IconButton label={t('log.refresh')} onClick={refresh}>{icons.refresh}</IconButton>
+      </div>
+      {failure !== null && <span className="sr-error">{t('log.unavailable', { error: failure })}</span>}
+      {entries === null && failure === null && <span className="sr-hint">{t('log.loading')}</span>}
+      {entries !== null && entries.length === 0 && <span className="sr-hint">{t('log.empty')}</span>}
+      {entries !== null && entries.length > 0 && (
+        <ul className="sr-log">
+          {entries.map((entry, i) => {
+            const open = expanded === i
+            if (entry.kind === 'tier') {
+              const tiers = entry.tasks.map((task, j) => `T${j + 1}→${task.tier ?? '—'}`).join('、')
+              return (
+                <li key={`${entry.at}-${i}`}>
+                  <button type="button" className="sr-log-item" aria-expanded={open} onClick={() => setExpanded(open ? null : i)}>
+                    <span className="sr-log-line">
+                      <span className="sr-log-time">{when(entry.at, now, t)}</span>
+                      <span className="sr-log-outcome" data-kind={entry.ok ? 'goto' : 'failed'}>
+                        {entry.ok ? `${t('log.tier')} ${tiers}` : t('log.tierFailed')}
+                      </span>
+                      <span className="sr-log-meta">{entry.elapsedMs} ms</span>
+                    </span>
+                    <span className="sr-log-text">{entry.ok ? name(entry.stage) : entry.error}</span>
+                  </button>
+                  {open && (
+                    <div className="sr-log-detail">
+                      {entry.tasks.map((task, j) => (
+                        <span key={j} className="sr-hint">
+                          T{j + 1} · {task.tier ?? '—'}{task.confidence === null ? '' : ` · ${percent(task.confidence)}`} — {task.text}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </li>
+              )
+            }
+            const moved = entry.to !== entry.from && entry.to !== null
+            const outcome = !entry.ok ? 'failed' : moved ? 'goto' : 'stay'
+            return (
+              <li key={`${entry.at}-${i}`}>
+                <button type="button" className="sr-log-item" aria-expanded={open} onClick={() => setExpanded(open ? null : i)}>
+                  <span className="sr-log-line">
+                    <span className="sr-log-time">{when(entry.at, now, t)}</span>
+                    <span className="sr-log-outcome" data-kind={outcome}>
+                      {outcome === 'failed'
+                        ? t('log.failed')
+                        : moved ? t('log.goto', { stage: name(entry.to) }) : t('log.stay', { stage: name(entry.to) })}
+                    </span>
+                    <span className="sr-log-meta">
+                      {entry.confidence === undefined ? '' : `${percent(entry.confidence)} · `}{entry.elapsedMs} ms
+                    </span>
+                  </span>
+                  <span className="sr-log-text">{entry.message}</span>
+                </button>
+                {open && (
+                  <div className="sr-log-detail">
+                    {entry.ok && (
+                      <Probabilities
+                        options={entry.candidates}
+                        probabilities={entry.probabilities ?? (entry.choice === undefined ? {} : { [entry.choice]: entry.confidence ?? 0 })}
+                        chosen={entry.choice}
+                        names={id => name(id)}
+                      />
+                    )}
+                    <span className={entry.ok ? 'sr-hint' : 'sr-error'}>{entry.ok ? entry.reason : entry.error}</span>
+                  </div>
+                )}
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </section>
   )
 }

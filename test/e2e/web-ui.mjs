@@ -1,6 +1,7 @@
 // Web UI smoke test (manual; not part of `pnpm test`): `pnpm test:web [screenshot.png]`.
-// One routed turn → stage chip, per-turn summary, picker keeps the scheme;
-// lock Plan from the panel → the next turn goes to the plan model, no judge.
+// One routed turn → stage chip, per-turn summary, picker keeps the scheme,
+// the panel's judge log lists the Jev call; lock Plan from the panel → the
+// next turn goes to the plan model, no Jev call.
 import { join } from 'node:path'
 import { boot, onboard, root, send } from './boot.mjs'
 
@@ -21,7 +22,13 @@ try {
   await picker.first().waitFor({ timeout: 10_000 })
   await chip.first().click()
   await page.getByRole('dialog').waitFor({ timeout: 10_000 })
-  const dialog = (await page.getByRole('dialog').textContent())?.slice(0, 200)
+  const judgeLog = page.getByRole('dialog').getByRole('region', { name: '判断日志' })
+  await judgeLog.getByText('→ 审查').waitFor({ timeout: 15_000 })
+  await judgeLog.getByRole('button', { expanded: false }).first().click()
+  await judgeLog.getByRole('meter').first().waitFor({ timeout: 5_000 })
+  await page.screenshot({ path: shot.replace(/\.png$/, '-panel.png') })
+  const dialog = (await page.getByRole('dialog').textContent())?.slice(0, 300)
+  const log = await judgeLog.innerText()
 
   // Lock to Plan from the panel (runs /stage plan through remote.commands),
   // then the next message must go to the plan model without judging.
@@ -37,6 +44,7 @@ try {
     tail: await tail.first().textContent(),
     picker: await picker.first().textContent(),
     dialog,
+    log,
     lockedChip: await lockedChip.first().textContent(),
     llm: run.llmCalls().map(c => `${c.kind} ${c.provider ?? ''}/${c.model ?? ''}`),
     errors: run.errors,

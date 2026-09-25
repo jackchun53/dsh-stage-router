@@ -4,7 +4,7 @@
  * or the host.
  */
 import type {
-  JudgeConfig, RouteConfig, SchemeConfig, StageConfig, StageRouterConfig, TransitionConfig, TransitionEvent,
+  JevConfig, RouteConfig, SchemeConfig, StageConfig, StageRouterConfig, TransitionConfig, TransitionEvent,
 } from '../../config/schema.js'
 import type { ConfigIssue } from '../../config/validate.js'
 
@@ -42,7 +42,6 @@ export function newScheme(taken: Iterable<string>): SchemeConfig {
     id: freshId('scheme', taken),
     name: '',
     initialStage: stage.id,
-    judge: null,
     subagents: { enabled: false, stage: 'inherit', classify: true },
     stages: [stage],
     transitions: [{ from: WILDCARD, to: WILDCARD, on: 'user_message' }],
@@ -76,8 +75,8 @@ export function updateScheme(draft: Draft, index: number, change: (scheme: Schem
   return { ...draft, schemes }
 }
 
-export function setDefaultJudge(draft: Draft, patch: Partial<JudgeConfig>): Draft {
-  return { ...draft, defaultJudge: { ...draft.defaultJudge, ...patch } }
+export function setJev(draft: Draft, patch: Partial<JevConfig>): Draft {
+  return { ...draft, jev: { ...draft.jev, ...patch } }
 }
 
 // ---- stages ----

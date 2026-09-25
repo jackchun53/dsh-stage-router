@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_JUDGE, parseConfig, effectiveJudge, type SchemeConfig } from '../src/config/schema.js'
+import { DEFAULT_JEV, jevConfigured, parseConfig, type SchemeConfig } from '../src/config/schema.js'
 import { EXAMPLE_SCHEME } from '../src/config/defaults.js'
 import { checkRoutes, schemeRoutes, validateConfig, validateScheme } from '../src/config/validate.js'
 
@@ -23,7 +23,7 @@ describe('parseConfig', () => {
   it('fills defaults for an empty config', () => {
     const config = parseConfig({})
     expect(config.schemes).toEqual([])
-    expect(config.defaultJudge).toEqual(DEFAULT_JUDGE)
+    expect(config.jev).toEqual(DEFAULT_JEV)
   })
 
   it('fills stage and transition defaults', () => {
@@ -85,16 +85,23 @@ describe('validateScheme', () => {
   })
 })
 
-describe('effectiveJudge', () => {
-  it('uses the default when a scheme has no override', () => {
-    expect(effectiveJudge(DEFAULT_JUDGE, { judge: null })).toBe(DEFAULT_JUDGE)
+describe('Jev config', () => {
+  it('defaults to the TypeSafe endpoint with no token', () => {
+    expect(parseConfig({}).jev).toEqual(DEFAULT_JEV)
+    expect(DEFAULT_JEV.baseUrl).toBe('https://api.typesafe.ai/v1')
+    expect(jevConfigured(DEFAULT_JEV)).toBe(false)
+    expect(jevConfigured({ ...DEFAULT_JEV, token: 't' })).toBe(true)
   })
 
-  it('merges a partial override over the default', () => {
-    const s = scheme({ judge: { timeoutMs: 100, minConfidence: 0.9 } })
-    const judge = effectiveJudge(DEFAULT_JUDGE, s)
-    expect(judge).toMatchObject({ timeoutMs: 100, minConfidence: 0.9, contextTurns: 2 })
-    expect(judge.route).toEqual(DEFAULT_JUDGE.route)
+  it('loads configs written for the old model judge, dropping its fields', () => {
+    const legacy = {
+      defaultJudge: { route: { provider: 'p', model: 'm' }, timeoutMs: 1, minConfidence: 0.5, contextTurns: 1, promptTemplate: null },
+      schemes: [{ ...scheme(), judge: { timeoutMs: 5 } }],
+    }
+    const config = parseConfig(legacy)
+    expect(config).not.toHaveProperty('defaultJudge')
+    expect(config.schemes[0]).not.toHaveProperty('judge')
+    expect(config.jev).toEqual(DEFAULT_JEV)
   })
 })
 
@@ -106,13 +113,6 @@ describe('checkRoutes', () => {
       return undefined
     })
     expect(issues).toEqual([{ path: 'scheme.stages[0].route', message: 'model not found' }])
-  })
-})
-
-describe('effectiveJudge route override', () => {
-  it('replaces the route only when the override names provider and model', () => {
-    const s = scheme({ judge: { route: { provider: 'x', model: 'y' } } })
-    expect(effectiveJudge(DEFAULT_JUDGE, s).route).toEqual({ provider: 'x', model: 'y' })
   })
 })
 

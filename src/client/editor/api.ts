@@ -6,6 +6,7 @@ import type { StageRouterConfig } from '../../config/schema.js'
 import type { ConfigIssue } from '../../config/validate.js'
 import type { CatalogProvider, EditorConfigView } from '../../editor-handlers.js'
 import type { TryJudgeInput, TryJudgeResult } from '../../editor-service.js'
+import type { JudgeLogEntry } from '../../shared/wire.js'
 
 export type { CatalogProvider, EditorConfigView, TryJudgeInput, TryJudgeResult }
 
@@ -27,10 +28,14 @@ export class EditorApiError extends Error {
 
 export interface EditorApi {
   getConfig(): Promise<EditorConfigView>
-  validate(draft: StageRouterConfig): Promise<ConfigIssue[]>
-  save(draft: StageRouterConfig, expectedRevision: number): Promise<EditorConfigView & { warnings: ConfigIssue[] }>
+  /** @param clearJevToken - validate as if the saved Jev token were removed. */
+  validate(draft: StageRouterConfig, clearJevToken?: boolean): Promise<ConfigIssue[]>
+  /** A blank `jev.token` keeps the saved token; `clearJevToken` removes it. */
+  save(draft: StageRouterConfig, expectedRevision: number, clearJevToken?: boolean): Promise<EditorConfigView & { warnings: ConfigIssue[] }>
   tryJudge(input: TryJudgeInput): Promise<TryJudgeResult>
   catalog(): Promise<CatalogProvider[]>
+  /** Recent Jev calls of one session, newest last (host memory only). */
+  judgeLog(sessionId: string): Promise<JudgeLogEntry[]>
 }
 
 export function createEditorApi(connection: () => RpcConnection | undefined): EditorApi {
@@ -49,9 +54,10 @@ export function createEditorApi(connection: () => RpcConnection | undefined): Ed
   }
   return {
     getConfig: () => call('getConfig', {}),
-    validate: async draft => (await call<{ issues: ConfigIssue[] }>('validate', { draft })).issues,
-    save: (draft, expectedRevision) => call('saveConfig', { draft, expectedRevision }),
+    validate: async (draft, clearJevToken = false) => (await call<{ issues: ConfigIssue[] }>('validate', { draft, clearJevToken })).issues,
+    save: (draft, expectedRevision, clearJevToken = false) => call('saveConfig', { draft, expectedRevision, clearJevToken }),
     tryJudge: input => call('tryJudge', { input }),
     catalog: () => call('catalog', {}),
+    judgeLog: async sessionId => (await call<{ entries: JudgeLogEntry[] }>('judgeLog', { sessionId })).entries,
   }
 }

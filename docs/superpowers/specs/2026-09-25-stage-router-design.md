@@ -187,7 +187,7 @@ stage-router:
 
 > 0.1.7 的写法：注入插槽用 `ctx.slots.inject(name, () => ctx.slots.register({...}, Component))`；`settingsScope.bind` 和 `injectSlot` 在 0.1.7 里都不存在。本章的界面细节在第 4 期开工前按 0.1.7 的设置服务重新核对一遍。
 
-**设置页编辑器**（注册到 `settings.plugins.tab` 插槽；`settings.section` 归设置页的插件区块所有，功能插件应往它的标签页里加）
+**设置页编辑器**（注册到 `settings.section` 插槽，在设置页左侧是独立的一级菜单「阶段路由」，排在「模型」之后）
 - **读写配置**：通过设置服务的 `describe` / `update` 读写本插件那一行的 `config`。
 - **模型下拉**：数据来自 `remote.session.modelCatalog()`，排除 `stage-router` 自己。推理强度下拉跟所选模型联动。
 - **页面结构**：左侧是方案列表（新建、复制、删除），右侧四个标签页：
@@ -310,7 +310,14 @@ test/
 
 第 4 期实现中的发现（详见 `docs/superpowers/plans/2026-09-25-phase4-editor.md`）：
 - dsh 0.1.7 的设置服务只读写 `.volatile()` 字段，所以插件的 `Config` 把 `defaultJudge` 和 `schemes` 标成 volatile。保存后插件收到 `loader/volatile-update` 并刷新配置快照，不重启，各会话的路由状态保留。
-- 编辑器入口是 设置 → 内置插件 → 阶段路由（`settings.plugins.tab` 插槽）。后端服务是 `TypertRemoteService`（命名空间 `stageRouter`），客户端经 `connection.rpc.call('/api', 'stageRouter/<方法>', { args })` 调用。
+- 编辑器入口最初是 设置 → 内置插件 → 阶段路由（`settings.plugins.tab` 插槽），后来改为设置页的一级菜单 设置 → 阶段路由（`settings.section` 插槽，`order: 12`）。后端服务是 `TypertRemoteService`（命名空间 `stageRouter`），客户端经 `connection.rpc.call('/api', 'stageRouter/<方法>', { args })` 调用。
 - 保存走 `ctx.settings.replace`，带修订号，写入 profile 的 `cordis.patch.yml`；结构错误阻止保存，模型不可用只提醒。
 
 界面语言（第 4 期之后）：插件的所有界面文字只有中文，包括阶段标签、面板、每轮摘要、编辑器、`/stage` 命令的说明和回复、校验提示、路由原因和判断失败原因，以及选择器里「<方案名>（阶段路由）」这个名字。客户端的英文字典直接复用中文字典，所以 dsh 界面是英文时，本插件仍然显示中文。只写进日志的文字，以及只发给模型的文字（判断器提示词、阶段提示消息），保持英文。
+
+判断器改用 Jev（2026-09-25，第 4 期之后）：本节以下内容取代正文里关于「判断器模型」的描述。
+- **只用 Jev**：去掉「用 dsh 里某个模型当判断器」的做法，包括 `defaultJudge`、方案级 `judge` 覆盖和提示词模板。顶层配置改为 `{ jev, schemes }`，`jev` 是 `{ baseUrl, model, token, timeoutMs, minConfidence, contextTurns }`，同样标成 volatile。`baseUrl` 默认 `https://api.typesafe.ai/v1`，`model` 默认 `jev-latest`。旧配置里的 `defaultJudge` 和 `schemes[].judge` 在解析时丢弃，旧 patch 文件照常加载。事件驱动的转换和规划者标签不变。
+- **调用方式**（`src/engine/jev.ts`，对齐 skill-vault 的 `jev.rs`）：`POST <baseUrl>/systemone`，`Authorization: Bearer <token>`，请求体 `{ model, state, questions }`。阶段判断是一道 `choice` 题（键 `stage`），选项是候选阶段、说明取阶段描述；`state` 带用户消息（截到 4000 字）、当前阶段和最近几轮对话。分档是每个任务一道 `choice` 题（键 `t1…tn`），选项是档位及其描述，`state.tasks` 带任务文本（每条截到 500 字，一批最多 30 条）。置信度取 Jev 的 `confidence`，没有时取所选项的概率。未配置、超时、401、其他 HTTP 错误、返回格式不对都返回失败，按原来的失败语义处理（第一条消息进初始阶段，否则留在当前阶段；档位用默认档）。
+- **token 保密**：`jev.token` 在 schema 里标成 `role('secret')`。编辑器的 `getConfig` 把 token 置空，另外返回 `jevTokenSet`；`validate`、`saveConfig`、`tryJudge` 收到空 token 时沿用已保存的 token，`saveConfig(…, clearJevToken=true)` 才会清除。Jev 未配置、模型不可用这类问题带 `severity: 'warning'`，不阻止保存。
+- **判断日志**：`src/engine/judge-log.ts` 在内存里按会话保存最近 50 条 Jev 调用（最多 200 个会话），阶段判断记录消息摘要、候选、Jev 的选择与各项概率、置信度、耗时、结果和原因，分档记录每个任务的档位。远程方法 `stageRouter/judgeLog(sessionId, limit?)` 供阶段面板读取，面板打开时拉取，也可以手动刷新。重启后清空。
+- **界面**：编辑器和阶段面板改用宿主通过模块表提供的 `@deepseek-ai/dsh-client-ui-primitives`（`Button`、`Switch`、`SegmentedTabs`、`Pill`、`Tag`、`StateDot`），配色全部换成宿主真实存在的 `--dsw-alias-*` token（原先用的 `--dsw-color-*` 在宿主里不存在，一直落到兜底色）。`:hover` / `:focus` 等样式写在 `src/client/styles.ts`，以 `sr-` 前缀注入一次。设置页顶部是一条吸顶工具栏：方案下拉、新建 / 复制 / 删除方案、错误和提醒计数、放弃修改和保存，下面是「概览 / 阶段 / 转换 / 子 agent / Jev」五个标签页，工具栏右侧的「Jev 已配置 / 未配置」可以直接跳到 Jev 页。概览页放方案的名称、ID、初始阶段，以及每个阶段（分档的阶段还有每个档位）的模型选择；点阶段名跳到「阶段」页并展开那张卡片。阶段页的卡片可以折叠，收起时显示模型摘要。分档的阶段仍保留阶段自己的模型，在没有进行中的待办时使用。Jev 页是连接设置和「试一试」。设置弹窗只有约 560px 宽，所以不用左右分栏；模型三联下拉和档位字段在更窄时用容器查询换行。单元测试里 primitives 由 `test/client/primitives-stub.tsx` 代替（其依赖只在宿主里有）。

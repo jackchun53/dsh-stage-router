@@ -3,6 +3,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-chat/client'
 import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import './projection.js'
 import type { StageRouterState, TurnRecord } from '../shared/wire.js'
+import { useStageRouterStyles } from './styles.js'
 
 export type TurnTailProps = PropsRuntime<'conversation.chat.turnTail'> & PropsLocale<'stage-router'>
 
@@ -15,6 +16,7 @@ export function changedTurn(state: StageRouterState | undefined, turn: number): 
 
 /** "本轮：规划 → 编码（v4-pro → flash）" under turns where routing changed. */
 export function TurnTail({ useProjection, turn, t }: TurnTailProps) {
+  useStageRouterStyles()
   const state = useProjection('stage-router')
   const record = changedTurn(state, turn.turn)
   if (record === undefined || state === undefined) return null
@@ -28,5 +30,5 @@ export function TurnTail({ useProjection, turn, t }: TurnTailProps) {
   const text = record.fromStage === null
     ? t('turn.first', params)
     : record.fromStage === record.toStage ? t('turn.modelOnly', params) : t('turn.changed', params)
-  return <div style={{ fontSize: 12, opacity: 0.65, padding: '2px 0' }}>{text}</div>
+  return <div className="sr-turn-tail">{text}</div>
 }

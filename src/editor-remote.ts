@@ -9,6 +9,7 @@ import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import type { ConfigIssue } from './config/validate.js'
 import type { TryJudgeInput, TryJudgeResult } from './editor-service.js'
 import type { CatalogProvider, EditorConfigView, EditorHandlers } from './editor-handlers.js'
+import type { JudgeLogEntry } from './shared/wire.js'
 
 export { createEditorHandlers } from './editor-handlers.js'
 
@@ -27,18 +28,23 @@ export class StageRouterEditorRemote extends TypertRemoteService {
   }
 
   @Remote
-  validate(draft: unknown): Promise<{ issues: ConfigIssue[] }> {
-    return this.handlers.validate(draft)
+  validate(draft: unknown, clearJevToken?: boolean): Promise<{ issues: ConfigIssue[] }> {
+    return this.handlers.validate(draft, clearJevToken)
   }
 
   @Remote
-  saveConfig(draft: unknown, expectedRevision?: number): Promise<EditorConfigView & { warnings: ConfigIssue[] }> {
-    return this.handlers.save(draft, expectedRevision)
+  saveConfig(draft: unknown, expectedRevision?: number, clearJevToken?: boolean): Promise<EditorConfigView & { warnings: ConfigIssue[] }> {
+    return this.handlers.save(draft, expectedRevision, clearJevToken)
   }
 
   @Remote
   tryJudge(input: TryJudgeInput): Promise<TryJudgeResult> {
     return this.handlers.tryJudge(input)
+  }
+
+  @Remote
+  judgeLog(sessionId: string, limit?: number): { entries: JudgeLogEntry[] } {
+    return this.handlers.judgeLog(sessionId, limit)
   }
 
   @Remote

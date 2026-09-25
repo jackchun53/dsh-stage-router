@@ -1,5 +1,6 @@
-/** Small form primitives for the settings editor (inline styles, dsw tokens with fallbacks). */
-import type { CSSProperties, ReactNode } from 'react'
+/** Form primitives for the settings editor, styled by `sr-*` classes on the host's `--dsw-*` tokens. */
+import type { ReactNode } from 'react'
+import { Switch } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { RouteConfig } from '../../config/schema.js'
 import type { ConfigIssue } from '../../config/validate.js'
 import type { StageRouterKey } from '../locales.js'
@@ -7,54 +8,36 @@ import type { CatalogProvider } from './api.js'
 
 export type T = (key: StageRouterKey, params?: Record<string, unknown>) => string
 
-export const styles = {
-  column: { display: 'grid', gap: 12 } satisfies CSSProperties,
-  row: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } satisfies CSSProperties,
-  card: {
-    display: 'grid', gap: 10, padding: 12,
-    border: '1px solid var(--dsw-color-border, rgba(127,127,127,.3))', borderRadius: 'var(--dsw-radius-md, 8px)',
-  } satisfies CSSProperties,
-  label: { display: 'grid', gap: 4, fontSize: 12 } satisfies CSSProperties,
-  labelText: { opacity: 0.75 } satisfies CSSProperties,
-  input: {
-    font: 'inherit', fontSize: 13, padding: '4px 8px', minHeight: 28, color: 'inherit',
-    background: 'var(--dsw-color-bg, transparent)',
-    border: '1px solid var(--dsw-color-border, rgba(127,127,127,.4))', borderRadius: 'var(--dsw-radius-sm, 6px)',
-  } satisfies CSSProperties,
-  button: {
-    font: 'inherit', fontSize: 12, padding: '0 10px', height: 28, cursor: 'pointer', color: 'inherit', background: 'transparent',
-    border: '1px solid var(--dsw-color-border, rgba(127,127,127,.4))', borderRadius: 'var(--dsw-radius-sm, 6px)',
-  } satisfies CSSProperties,
-  primary: {
-    font: 'inherit', fontSize: 12, padding: '0 14px', height: 28, cursor: 'pointer',
-    color: 'var(--dsw-color-on-accent, #fff)', background: 'var(--dsw-color-accent, #2f6fed)',
-    border: '1px solid transparent', borderRadius: 'var(--dsw-radius-sm, 6px)',
-  } satisfies CSSProperties,
-  error: { color: 'var(--dsw-color-danger, #d33)', fontSize: 12 } satisfies CSSProperties,
-  warning: { color: 'var(--dsw-color-warning, #b7791f)', fontSize: 12 } satisfies CSSProperties,
-  muted: { opacity: 0.7, fontSize: 12 } satisfies CSSProperties,
-}
-
-export function Issues({ issues, warning = false }: { issues: readonly ConfigIssue[]; warning?: boolean }) {
+/** Field issues; red when any is an error, amber when all are warnings (e.g. an unavailable model). */
+export function Issues({ issues, warning = issues.every(issue => issue.severity === 'warning') }: { issues: readonly ConfigIssue[]; warning?: boolean }) {
   if (issues.length === 0) return null
   return (
-    <div role={warning ? 'status' : 'alert'} style={warning ? styles.warning : styles.error}>
+    <div role={warning ? 'status' : 'alert'} className={warning ? 'sr-warning' : 'sr-error'}>
       {issues.map((issue, i) => <div key={i}>{issue.message}</div>)}
     </div>
   )
 }
 
-export function Field({ label, issues = [], children }: { label: string; issues?: readonly ConfigIssue[]; children: ReactNode }) {
+/** Label above its control, an optional hint, then the field's issues. */
+export function Field({ label, hint, issues = [], span = false, children }: {
+  label: string
+  hint?: string
+  issues?: readonly ConfigIssue[]
+  /** Take the whole row of a `sr-grid`. */
+  span?: boolean
+  children: ReactNode
+}) {
   return (
-    <label style={styles.label}>
-      <span style={styles.labelText}>{label}</span>
+    <label className={span ? 'sr-field sr-span' : 'sr-field'}>
+      <span className="sr-field-label">{label}</span>
       {children}
+      {hint !== undefined && <span className="sr-hint">{hint}</span>}
       <Issues issues={issues} />
     </label>
   )
 }
 
-export function TextInput({ value, onChange, onCommit, placeholder, disabled, ariaLabel }: {
+export function TextInput({ value, onChange, onCommit, placeholder, disabled, ariaLabel, invalid, type = 'text', mono = false }: {
   value: string
   onChange?: (value: string) => void
   /** Called on blur / Enter instead of every keystroke (for renames). */
@@ -62,16 +45,23 @@ export function TextInput({ value, onChange, onCommit, placeholder, disabled, ar
   placeholder?: string
   disabled?: boolean
   ariaLabel?: string
+  invalid?: boolean
+  type?: 'text' | 'password' | 'url'
+  mono?: boolean
 }) {
   return (
     <input
-      style={styles.input}
+      type={type}
+      className={mono ? 'sr-control sr-mono' : 'sr-control'}
       value={onCommit === undefined ? value : undefined}
       defaultValue={onCommit === undefined ? undefined : value}
       key={onCommit === undefined ? undefined : value}
       placeholder={placeholder}
       disabled={disabled}
       aria-label={ariaLabel}
+      aria-invalid={invalid || undefined}
+      autoComplete={type === 'password' ? 'new-password' : 'off'}
+      spellCheck={false}
       onChange={event => onChange?.(event.target.value)}
       onBlur={event => onCommit?.(event.target.value.trim())}
       onKeyDown={event => { if (event.key === 'Enter' && onCommit !== undefined) (event.target as HTMLInputElement).blur() }}
@@ -84,9 +74,9 @@ export function NumberInput({ value, onChange, step = 1, min, max, disabled, ari
 }) {
   return (
     <input
-      type="number" style={{ ...styles.input, width: 110 }} value={value} step={step} min={min} max={max}
+      type="number" className="sr-control" value={value} step={step} min={min} max={max}
       disabled={disabled} aria-label={ariaLabel}
-      onChange={event => { const next = Number(event.target.value); if (!Number.isNaN(next)) onChange(next) }}
+      onChange={event => { const next = Number(event.target.value); if (event.target.value !== '' && !Number.isNaN(next)) onChange(next) }}
     />
   )
 }
@@ -96,31 +86,36 @@ export function TextArea({ value, onChange, placeholder, rows = 3, disabled, ari
 }) {
   return (
     <textarea
-      style={{ ...styles.input, resize: 'vertical', fontFamily: 'inherit' }} rows={rows} value={value}
+      className="sr-control" rows={rows} value={value}
       placeholder={placeholder} disabled={disabled} aria-label={ariaLabel}
       onChange={event => onChange(event.target.value)}
     />
   )
 }
 
-export function Select<V extends string>({ value, options, onChange, disabled, ariaLabel }: {
-  value: V; options: readonly { value: V; label: string }[]; onChange: (value: V) => void; disabled?: boolean; ariaLabel?: string
+export function Select<V extends string>({ value, options, onChange, disabled, ariaLabel, invalid }: {
+  value: V; options: readonly { value: V; label: string }[]; onChange: (value: V) => void; disabled?: boolean; ariaLabel?: string; invalid?: boolean
 }) {
   return (
-    <select style={styles.input} value={value} disabled={disabled} aria-label={ariaLabel} onChange={event => onChange(event.target.value as V)}>
+    <select className="sr-control" value={value} disabled={disabled} aria-label={ariaLabel} aria-invalid={invalid || undefined}
+      onChange={event => onChange(event.target.value as V)}>
       {options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
     </select>
   )
 }
 
-export function Button({ children, onClick, disabled, primary = false, ariaLabel }: {
-  children: ReactNode; onClick: () => void; disabled?: boolean; primary?: boolean; ariaLabel?: string
+/** A settings row: title and hint on the left, the host's switch on the right. */
+export function Toggle({ label, hint, checked, onChange, disabled }: {
+  label: string; hint?: string; checked: boolean; onChange: (next: boolean) => void; disabled?: boolean
 }) {
   return (
-    <button type="button" style={{ ...(primary ? styles.primary : styles.button), opacity: disabled ? 0.5 : 1 }}
-      disabled={disabled} aria-label={ariaLabel} onClick={onClick}>
-      {children}
-    </button>
+    <div className="sr-toggle">
+      <div className="sr-toggle-text">
+        <span className="sr-toggle-title">{label}</span>
+        {hint !== undefined && <span className="sr-hint">{hint}</span>}
+      </div>
+      <Switch label={label} checked={checked} disabled={disabled} onChange={onChange} />
+    </div>
   )
 }
 
@@ -128,8 +123,8 @@ export function Button({ children, onClick, disabled, primary = false, ariaLabel
  * Provider → model → effort pickers fed by the host catalog. Values missing
  * from the catalog stay selectable so an unavailable model is visible, not lost.
  */
-export function RoutePicker({ route, catalog, onChange, t, disabled, label }: {
-  route: RouteConfig; catalog: readonly CatalogProvider[]; onChange: (route: RouteConfig) => void; t: T; disabled?: boolean; label: string
+export function RoutePicker({ route, catalog, onChange, t, disabled, label, invalid }: {
+  route: RouteConfig; catalog: readonly CatalogProvider[]; onChange: (route: RouteConfig) => void; t: T; disabled?: boolean; label: string; invalid?: boolean
 }) {
   const providers = catalog.map(p => ({ value: p.id, label: p.name }))
   if (route.provider !== '' && !providers.some(p => p.value === route.provider)) providers.push({ value: route.provider, label: route.provider })
@@ -146,15 +141,29 @@ export function RoutePicker({ route, catalog, onChange, t, disabled, label }: {
     return effort === '' ? rest : { ...rest, reasoningEffort: effort }
   }
   return (
-    <div style={styles.row}>
-      <Select ariaLabel={`${label} · ${t('field.provider')}`} disabled={disabled} value={route.provider}
-        options={[{ value: '', label: '—' }, ...providers]}
+    <div className="sr-route">
+      <Select ariaLabel={`${label} · ${t('field.provider')}`} disabled={disabled} value={route.provider} invalid={invalid && route.provider === ''}
+        options={[{ value: '', label: t('field.provider') }, ...providers]}
         onChange={value => onChange({ provider: value, model: '' })} />
-      <Select ariaLabel={`${label} · ${t('field.model')}`} disabled={disabled || route.provider === ''} value={route.model}
-        options={[{ value: '', label: '—' }, ...models]}
+      <Select ariaLabel={`${label} · ${t('field.model')}`} disabled={disabled || route.provider === ''} value={route.model} invalid={invalid}
+        options={[{ value: '', label: t('field.model') }, ...models]}
         onChange={value => onChange(withEffort({ ...route, model: value }, ''))} />
       <Select ariaLabel={`${label} · ${t('field.effort')}`} disabled={disabled || route.model === ''} value={route.reasoningEffort ?? ''}
         options={efforts} onChange={value => onChange(withEffort(route, value))} />
     </div>
   )
+}
+
+/** A small subheading that groups related fields inside a card. */
+export function GroupTitle({ children }: { children: ReactNode }) {
+  return <span className="sr-group-title">{children}</span>
+}
+
+/** "Provider · model · effort" by catalog display names, or `undefined` when no model is chosen. */
+export function routeSummary(route: RouteConfig, catalog: readonly CatalogProvider[]): string | undefined {
+  if (route.model === '') return undefined
+  const provider = catalog.find(p => p.id === route.provider)
+  const model = provider?.models.find(m => m.id === route.model)
+  const effort = model?.efforts.find(e => e.id === route.reasoningEffort)?.name ?? route.reasoningEffort
+  return [provider?.name ?? route.provider, model?.name ?? route.model, effort].filter(Boolean).join(' · ')
 }

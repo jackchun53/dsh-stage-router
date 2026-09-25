@@ -1,4 +1,5 @@
-import type { JudgeConfig, RouteConfig, SchemeConfig } from '../config/schema.js'
+import type { JevConfig, RouteConfig, SchemeConfig } from '../config/schema.js'
+import type { TierJudgeLog } from './judge-log.js'
 import { hasTiers } from '../config/validate.js'
 import { TIER_WAIT_MS, plannerTag, taskTier, type TierClassifier, type TodoLike } from './tiers.js'
 
@@ -31,7 +32,9 @@ export interface ChildRoute {
 
 export interface ChildRouteDeps {
   tiers: Pick<TierClassifier, 'classify' | 'lookup'>
-  judgeConfig: JudgeConfig
+  jev: JevConfig
+  /** Receives the judge-log entry of a Jev tier call this starts (logged under the parent session). */
+  record?(entry: TierJudgeLog): void
   usable(route: RouteConfig): Promise<boolean>
   waitMs?: number
 }
@@ -68,13 +71,13 @@ export async function routeChild(child: ChildView, parent: ParentView, deps: Chi
     }
   }
   if (tier === undefined && settings.classify && tiers.source !== 'planner' && child.task.trim() !== '') {
-    deps.tiers.classify(stage, [child.task], deps.judgeConfig)
+    deps.tiers.classify(stage, [child.task], deps.jev, deps.record)
     const pending = deps.tiers.lookup(stage, child.task)
     let timer: NodeJS.Timeout | undefined
     const expired = new Promise<undefined>(resolve => { timer = setTimeout(resolve, deps.waitMs ?? TIER_WAIT_MS, undefined) })
     tier = pending === undefined ? undefined : await Promise.race([pending, expired])
     clearTimeout(timer)
-    if (tier !== undefined) reason = '判断器定档'
+    if (tier !== undefined) reason = 'Jev 定档'
   }
   tier ??= tiers.default ?? tiers.levels[0]!.id
   const level = tiers.levels.find(l => l.id === tier)
